@@ -1,105 +1,55 @@
-# ===== Broker 6 Jolokia health / recovery watch =====
-
-$url = 'http://cto-eep-obs-prod-uk-azb4001-broker6.uk.hsbc:7777/jolokia/'
-
-$body = @'
-[
-  {"type":"read","mbean":"kafka.server:type=KafkaServer,name=BrokerState","attribute":"Value"},
-
-  {"type":"read","mbean":"java.lang:type=Memory","attribute":"HeapMemoryUsage"},
-  {"type":"read","mbean":"java.lang:type=OperatingSystem","attribute":["ProcessCpuLoad","SystemCpuLoad","ProcessCpuTime","AvailableProcessors"]},
-  {"type":"read","mbean":"java.lang:type=GarbageCollector,name=G1 Young Generation","attribute":["CollectionCount","CollectionTime"]},
-  {"type":"read","mbean":"java.lang:type=GarbageCollector,name=G1 Old Generation","attribute":["CollectionCount","CollectionTime"]},
-
-  {"type":"read","mbean":"kafka.network:type=SocketServer,name=NetworkProcessorAvgIdlePercent","attribute":"Value"},
-  {"type":"read","mbean":"kafka.server:type=KafkaRequestHandlerPool,name=RequestHandlerAvgIdlePercent","attribute":"Value"},
-
-  {"type":"read","mbean":"kafka.server:type=ReplicaManager,name=UnderReplicatedPartitions","attribute":"Value"},
-  {"type":"read","mbean":"kafka.server:type=ReplicaManager,name=UnderMinIsrPartitionCount","attribute":"Value"},
-  {"type":"read","mbean":"kafka.server:type=ReplicaManager,name=OfflineReplicaCount","attribute":"Value"},
-  {"type":"read","mbean":"kafka.server:type=ReplicaManager,name=PartitionCount","attribute":"Value"},
-  {"type":"read","mbean":"kafka.server:type=ReplicaManager,name=LeaderCount","attribute":"Value"},
-  {"type":"read","mbean":"kafka.server:type=ReplicaManager,name=ReassigningPartitions","attribute":"Value"},
-
-  {"type":"read","mbean":"kafka.controller:type=KafkaController,name=ActiveControllerCount","attribute":"Value"},
-  {"type":"read","mbean":"kafka.controller:type=KafkaController,name=OfflinePartitionsCount","attribute":"Value"},
-
-  {"type":"read","mbean":"kafka.server:type=SessionExpireListener,name=ZooKeeperDisconnectsPerSec","attribute":"Count"},
-  {"type":"read","mbean":"kafka.server:type=SessionExpireListener,name=ZooKeeperExpiresPerSec","attribute":"Count"}
-]
-'@
-
 function Get-JmxValue {
     param(
         [array]$Response,
         [string]$MBean
     )
 
-    $item = $Response | Where-Object { $_.request.mbean -eq $MBean } | Select-Object -First 1
+    $parts = $MBean -split ':', 2
+    $domain = $parts[0]
 
-    if ($null -eq $item -or $item.status -ne 200) {
+    $keys = @{}
+    if ($parts.Count -eq 2) {
+        ($parts[1] -split ',') | ForEach-Object {
+            $kv = $_ -split '=', 2
+            if ($kv.Count -eq 2) {
+                $keys[$kv[0]] = $kv[1]
+            }
+        }
+    }
+
+    $item = $Response | Where-Object {
+        if ($_.status -ne 200) { return $false }
+
+        $actualParts = $_.request.mbean -split ':', 2
+        if ($actualParts[0] -ne $domain) { return $false }
+
+        $actualKeys = @{}
+        if ($actualParts.Count -eq 2) {
+            ($actualParts[1] -split ',') | ForEach-Object {
+                $kv = $_ -split '=', 2
+                if ($kv.Count -eq 2) {
+                    $actualKeys[$kv[0]] = $kv[1]
+                }
+            }
+        }
+
+        foreach ($key in $keys.Keys) {
+            if ($actualKeys[$key] -ne $keys[$key]) {
+                return $false
+            }
+        }
+
+        return $true
+    } | Select-Object -First 1
+
+    if ($null -eq $item) {
         return 'N/A'
     }
 
+    if ($item.value -is [System.Collections.IDictionary] -and
+        $item.value.Contains('Value')) {
+        return $item.value.Value
+    }
+
     return $item.value
-}
-
-while ($true) {
-    try {
-        $r = Invoke-RestMethod `
-            -Uri $url `
-            -Method Post `
-            -ContentType 'application/json' `
-            -Body $body `
-            -TimeoutSec 15 `
-            -ErrorAction Stop
-
-        $heap = Get-JmxValue $r 'java.lang:type=Memory'
-        $os   = Get-JmxValue $r 'java.lang:type=OperatingSystem'
-        $ygc  = Get-JmxValue $r 'java.lang:type=GarbageCollector,name=G1 Young Generation'
-        $ogc  = Get-JmxValue $r 'java.lang:type=GarbageCollector,name=G1 Old Generation'
-
-        Clear-Host
-        Write-Host "Broker 16 / cto-cfk-sydc-kafka-6  |  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Cyan
-        Write-Host "================================================================================"
-
-        [PSCustomObject]@{
-            BrokerState                = Get-JmxValue $r 'kafka.server:type=KafkaServer,name=BrokerState'
-            HeapUsedGiB                = if ($heap -ne 'N/A') { [math]::Round($heap.used / 1GB, 2) } else { 'N/A' }
-            HeapMaxGiB                 = if ($heap -ne 'N/A') { [math]::Round($heap.max / 1GB, 2) } else { 'N/A' }
-            HeapUsedPercent            = if ($heap -ne 'N/A' -and $heap.max -gt 0) { [math]::Round(($heap.used / $heap.max) * 100, 1) } else { 'N/A' }
-            ProcessCpuPercent          = if ($os -ne 'N/A') { [math]::Round($os.ProcessCpuLoad * 100, 1) } else { 'N/A' }
-            SystemCpuPercent           = if ($os -ne 'N/A') { [math]::Round($os.SystemCpuLoad * 100, 1) } else { 'N/A' }
-            G1YoungGcCount             = if ($ygc -ne 'N/A') { $ygc.CollectionCount } else { 'N/A' }
-            G1YoungGcTimeMs            = if ($ygc -ne 'N/A') { $ygc.CollectionTime } else { 'N/A' }
-            G1OldGcCount               = if ($ogc -ne 'N/A') { $ogc.CollectionCount } else { 'N/A' }
-            G1OldGcTimeMs              = if ($ogc -ne 'N/A') { $ogc.CollectionTime } else { 'N/A' }
-            NetworkProcessorIdlePct    = $null
-            RequestHandlerIdlePct      = $null
-        } | ForEach-Object {
-            $_.NetworkProcessorIdlePct = $(Get-JmxValue $r 'kafka.network:type=SocketServer,name=NetworkProcessorAvgIdlePercent')
-            $_.RequestHandlerIdlePct   = $(Get-JmxValue $r 'kafka.server:type=KafkaRequestHandlerPool,name=RequestHandlerAvgIdlePercent')
-            $_
-        } | Format-List
-
-        Write-Host "ReplicaManager / controller" -ForegroundColor Yellow
-
-        [PSCustomObject]@{
-            UnderReplicatedPartitions  = Get-JmxValue $r 'kafka.server:type=ReplicaManager,name=UnderReplicatedPartitions'
-            UnderMinIsrPartitions      = Get-JmxValue $r 'kafka.server:type=ReplicaManager,name=UnderMinIsrPartitionCount'
-            OfflineReplicas            = Get-JmxValue $r 'kafka.server:type=ReplicaManager,name=OfflineReplicaCount'
-            LocalPartitionCount        = Get-JmxValue $r 'kafka.server:type=ReplicaManager,name=PartitionCount'
-            LocalLeaderCount           = Get-JmxValue $r 'kafka.server:type=ReplicaManager,name=LeaderCount'
-            ReassigningPartitions      = Get-JmxValue $r 'kafka.server:type=ReplicaManager,name=ReassigningPartitions'
-            ActiveControllerCount      = Get-JmxValue $r 'kafka.controller:type=KafkaController,name=ActiveControllerCount'
-            OfflinePartitionsCount     = Get-JmxValue $r 'kafka.controller:type=KafkaController,name=OfflinePartitionsCount'
-            ZooKeeperDisconnectCount   = Get-JmxValue $r 'kafka.server:type=SessionExpireListener,name=ZooKeeperDisconnectsPerSec'
-            ZooKeeperExpiryCount       = Get-JmxValue $r 'kafka.server:type=SessionExpireListener,name=ZooKeeperExpiresPerSec'
-        } | Format-List
-    }
-    catch {
-        Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - JOLOKIA FAILED: $($_.Exception.Message)" -ForegroundColor Red
-    }
-
-    Start-Sleep -Seconds 10
 }
