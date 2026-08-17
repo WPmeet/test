@@ -1,1 +1,9 @@
 
+kafka.server:type=ReplicaManager,name=LeaderCount
+kafka.server:type=ReplicaManager,name=PartitionCount
+kafka.server:type=ReplicaManager,name=UnderReplicatedPartitions
+kafka.server:type=ReplicaManager,name=UnderMinIsrPartitionCount
+kafka.server:type=ReplicaManager,name=ReassigningPartitions
+kafka.controller:type=KafkaController,name=ActiveControllerCount
+kafka.controller:type=KafkaController,name=OfflinePartitionsCount
+kafka.controller:type=KafkaController,name=PreferredReplicaImbalanceCount
