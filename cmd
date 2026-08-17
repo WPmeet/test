@@ -1,5 +1,5 @@
 # jk.ps1
-# Kafka broker 16 Jolokia watcher
+# Broker 16 Jolokia watcher - vertical output
 # Stop with Ctrl+C
 
 $url = 'http://cto-eep-obs-prod-uk-azb4001-broker6.uk.hsbc:7777/jolokia/'
@@ -35,7 +35,7 @@ $body = @'
 function Get-Entry {
     param([array]$Results, [string]$MBean)
 
-    return $Results |
+    $Results |
         Where-Object { $_.request.mbean -eq $MBean -and $_.status -eq 200 } |
         Select-Object -First 1
 }
@@ -76,6 +76,23 @@ function Get-Delta {
     }
 
     return [math]::Round(([double]$Current - [double]$Previous), 1)
+}
+
+function Print-Metric {
+    param(
+        [string]$Name,
+        $Value,
+        [bool]$Bad = $false
+    )
+
+    $text = if ($null -eq $Value) { 'N/A' } else { $Value }
+
+    if ($Bad) {
+        Write-Host ("{0,-28}: {1}" -f $Name, $text) -ForegroundColor Red
+    }
+    else {
+        Write-Host ("{0,-28}: {1}" -f $Name, $text)
+    }
 }
 
 $previous = @{}
@@ -126,6 +143,20 @@ while ($true) {
             'N/A'
         }
 
+        $heapUsedGiB = if ($heap) {
+            [math]::Round(($heap.used / 1GB), 2)
+        }
+        else {
+            'N/A'
+        }
+
+        $heapMaxGiB = if ($heap) {
+            [math]::Round(($heap.max / 1GB), 2)
+        }
+        else {
+            'N/A'
+        }
+
         $cpuPct = if ($os -and $null -ne $os.ProcessCpuLoad) {
             [math]::Round((100 * $os.ProcessCpuLoad), 1)
         }
@@ -153,49 +184,46 @@ while ($true) {
         $fetchLocalMax = if ($fetchLocal) { $fetchLocal.Max } else { 'N/A' }
         $flushMax = if ($flush) { $flush.Max } else { 'N/A' }
 
-        $line = @(
-            "T=$(Get-Date -Format 'HH:mm:ss')"
-            "State=$state"
-            "URP=$urp"
-            "MinISR=$minIsr"
-            "OffRep=$offlineReplicas"
-            "Part=$partitions"
-            "Lead=$leaders"
-            "ISRshrinkDelta=$isrShrinkDelta"
-            "ZKdiscDelta=$zkDisconnectDelta"
-            "ZKexpDelta=$zkExpireDelta"
-            "NetIdlePct=$netIdlePct"
-            "ReqQ=$requestQueue"
-            "HeapPct=$heapPct"
-            "CpuPct=$cpuPct"
-            "GCYoungDeltaMs=$gcYoungDelta"
-            "GCOldDeltaMs=$gcOldDelta"
-            "FollowerFetchDelta=$fetchDelta"
-            "FetchQueueMaxMs=$fetchQueueMax"
-            "FetchLocalMaxMs=$fetchLocalMax"
-            "FlushMaxMs=$flushMax"
-            "OfflineDirs=$offlineDirs"
-            "BytesInDelta=$bytesInDelta"
-            "BytesOutDelta=$bytesOutDelta"
-        ) -join ' | '
+        Clear-Host
+        Write-Host "Kafka broker 16 / cto-cfk-sydc-kafka-6" -ForegroundColor Cyan
+        Write-Host "Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') | refresh: $intervalSeconds sec | Ctrl+C to stop"
+        Write-Host ('=' * 55)
 
-        $bad = (
-            $state -ne 3 -or
-            $urp -gt 0 -or
-            $minIsr -gt 0 -or
-            $offlineReplicas -gt 0 -or
-            $offlineDirs -gt 0 -or
-            $isrShrinkDelta -gt 0 -or
-            $zkDisconnectDelta -gt 0 -or
-            $zkExpireDelta -gt 0
-        )
+        Write-Host 'Broker / controller metadata' -ForegroundColor Yellow
+        Print-Metric 'Broker state' $state ($state -ne 3)
+        Print-Metric 'Local partition count' $partitions
+        Print-Metric 'Local leader count' $leaders
+        Print-Metric 'Under replicated partitions' $urp ($urp -gt 0)
+        Print-Metric 'Under min ISR partitions' $minIsr ($minIsr -gt 0)
+        Print-Metric 'Offline replicas' $offlineReplicas ($offlineReplicas -gt 0)
+        Print-Metric 'ISR shrinks, last 10 sec' $isrShrinkDelta ($isrShrinkDelta -gt 0)
 
-        if ($bad) {
-            Write-Host $line -ForegroundColor Red
-        }
-        else {
-            Write-Host $line -ForegroundColor Green
-        }
+        Write-Host ''
+        Write-Host 'ZooKeeper stability' -ForegroundColor Yellow
+        Print-Metric 'ZK disconnects, total' $zkDisconnects
+        Print-Metric 'ZK disconnects, last 10 sec' $zkDisconnectDelta ($zkDisconnectDelta -gt 0)
+        Print-Metric 'ZK expiries, total' $zkExpires
+        Print-Metric 'ZK expiries, last 10 sec' $zkExpireDelta ($zkExpireDelta -gt 0)
+
+        Write-Host ''
+        Write-Host 'JVM / broker processing' -ForegroundColor Yellow
+        Print-Metric 'Heap used / max GiB' "$heapUsedGiB / $heapMaxGiB"
+        Print-Metric 'Heap used percent' "$heapPct%"
+        Print-Metric 'Process CPU percent' "$cpuPct%"
+        Print-Metric 'G1 young GC ms, last 10 sec' $gcYoungDelta
+        Print-Metric 'G1 old GC ms, last 10 sec' $gcOldDelta
+        Print-Metric 'Network processor idle percent' "$netIdlePct%" ($networkIdle -ne $null -and $netIdlePct -lt 5)
+        Print-Metric 'Request queue size' $requestQueue
+
+        Write-Host ''
+        Write-Host 'Follower fetch / storage indicators' -ForegroundColor Yellow
+        Print-Metric 'Follower fetches, last 10 sec' $fetchDelta
+        Print-Metric 'Follower fetch queue max ms' $fetchQueueMax
+        Print-Metric 'Follower fetch local max ms' $fetchLocalMax
+        Print-Metric 'Log flush max ms' $flushMax
+        Print-Metric 'Offline log directories' $offlineDirs ($offlineDirs -gt 0)
+        Print-Metric 'Bytes in, last 10 sec' $bytesInDelta
+        Print-Metric 'Bytes out, last 10 sec' $bytesOutDelta
 
         $previous = @{
             YoungGcTime = if ($youngGc) { $youngGc.CollectionTime } else { $null }
