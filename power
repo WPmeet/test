@@ -1,7 +1,9 @@
-# ===== EDIT ONLY THIS URL =====
+# jk.ps1
+# Kafka broker Jolokia watcher
+# Stop with Ctrl+C
+
 $url = 'http://cto-eep-obs-prod-uk-azb4001-broker6.uk.hsbc:7777/jolokia/'
 
-# One POST request to Jolokia
 $body = @'
 [
   {"type":"read","mbean":"kafka.server:name=BrokerState,type=KafkaServer","attribute":"Value"},
@@ -17,16 +19,15 @@ $body = @'
   {"type":"read","mbean":"kafka.server:name=ReassigningPartitions,type=ReplicaManager","attribute":"Value"},
 
   {"type":"read","mbean":"kafka.controller:name=ActiveControllerCount,type=KafkaController","attribute":"Value"},
-  {"type":"read","mbean":"kafka.controller:name=OfflinePartitionsCount,type=KafkaController","attribute":"Value"}
+
+  {"type":"read","mbean":"kafka.server:name=ZooKeeperDisconnectsPerSec,type=SessionExpireListener","attribute":"Count"},
+  {"type":"read","mbean":"kafka.server:name=ZooKeeperExpiresPerSec,type=SessionExpireListener","attribute":"Count"}
 ]
 '@
 
 while ($true) {
-    Clear-Host
-    Write-Host "===== $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') =====" -ForegroundColor Cyan
-
     try {
-        $r = Invoke-RestMethod `
+        $result = Invoke-RestMethod `
             -Uri $url `
             -Method POST `
             -ContentType 'application/json' `
@@ -34,37 +35,50 @@ while ($true) {
             -TimeoutSec 15 `
             -ErrorAction Stop
 
-        $r | ForEach-Object {
-            $name = $_.request.mbean
+        Clear-Host
+        Write-Host "===== $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') =====" -ForegroundColor Cyan
 
-            if ($_.status -eq 200) {
-                $value = $_.value
+        foreach ($item in $result) {
+            $mbean = $item.request.mbean
 
-                # Jolokia gives {"Value":n} for single-value Kafka MBeans
-                if ($null -ne $value.Value) {
-                    $value = $value.Value
-                }
-                elseif ($null -ne $value.HeapMemoryUsage) {
-                    $usedGiB = [math]::Round($value.HeapMemoryUsage.used / 1GB, 2)
-                    $maxGiB  = [math]::Round($value.HeapMemoryUsage.max / 1GB, 2)
-                    $pct     = [math]::Round(($value.HeapMemoryUsage.used / $value.HeapMemoryUsage.max) * 100, 1)
-                    $value   = "used=$usedGiB GiB / max=$maxGiB GiB ($pct%)"
-                }
-                elseif ($null -ne $value.ProcessCpuLoad) {
-                    $procCpu = [math]::Round($value.ProcessCpuLoad * 100, 1)
-                    $sysCpu  = [math]::Round($value.SystemCpuLoad * 100, 1)
-                    $value   = "process=$procCpu% system=$sysCpu%"
-                }
-
-                Write-Host "$name : $value"
+            if ($item.status -ne 200) {
+                Write-Host "$mbean : N/A | status=$($item.status) | $($item.error)" -ForegroundColor Yellow
+                continue
             }
-            else {
-                Write-Host "$name : N/A | status=$($_.status) | $($_.error)" -ForegroundColor DarkYellow
+
+            $value = $item.value
+
+            # Kafka single attributes come back as: {"Value": number}
+            if ($null -ne $value.Value) {
+                Write-Host "$mbean : $($value.Value)"
+                continue
             }
+
+            # JVM heap response
+            if ($null -ne $value.HeapMemoryUsage) {
+                $heap = $value.HeapMemoryUsage
+                $usedGiB = [math]::Round($heap.used / 1GB, 2)
+                $maxGiB  = [math]::Round($heap.max / 1GB, 2)
+                $pct     = [math]::Round(($heap.used / $heap.max) * 100, 1)
+
+                Write-Host "$mbean : used=$usedGiB GiB max=$maxGiB GiB ($pct%)"
+                continue
+            }
+
+            # JVM CPU response
+            if ($null -ne $value.ProcessCpuLoad) {
+                $proc = [math]::Round($value.ProcessCpuLoad * 100, 1)
+                $sys  = [math]::Round($value.SystemCpuLoad * 100, 1)
+
+                Write-Host "$mbean : process=$proc% system=$sys%"
+                continue
+            }
+
+            Write-Host "$mbean : $($value | Out-String)"
         }
     }
     catch {
-        Write-Host "JOLOKIA REQUEST FAILED: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') JOLOKIA REQUEST FAILED: $($_.Exception.Message)" -ForegroundColor Red
     }
 
     Start-Sleep -Seconds 10
