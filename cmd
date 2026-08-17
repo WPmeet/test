@@ -1,7 +1,22 @@
-# jk-5-6.ps1
-# Kafka broker 5 + broker 6 Jolokia watcher.
-# Appends a fresh block every 10 seconds. Stop with Ctrl+C.
+# jk-5-6-request-queue.ps1
+# Kafka / Jolokia watcher for broker 5 and broker 6.
+#
+# What it does:
+# - Polls both brokers every 10 seconds.
+# - Appends new output blocks; it does NOT clear the terminal.
+# - Tracks deltas independently for each broker.
+# - Shows replication health, ZK deltas, JVM/CPU, request queue,
+#   request-handler idle, fetch timings, storage/flush metrics, and traffic.
+# - Attempts the standard Kafka request-handler idle MBean and renders N/A
+#   if this Kafka / Confluent version does not expose it.
+#
+# Stop with Ctrl+C.
 
+$ErrorActionPreference = 'Stop'
+
+# -----------------------------
+# Configuration
+# -----------------------------
 $intervalSeconds = 10
 
 $brokers = @(
@@ -15,39 +30,57 @@ $brokers = @(
     }
 )
 
+# -----------------------------
+# Jolokia bulk request
+# -----------------------------
+# NOTE:
+# RequestHandlerAvgIdlePercent is normally exposed as a Meter, so "Count"
+# is used rather than "Value". If unavailable in your version, script shows N/A.
 $body = @'
 [
-{"type":"read","mbean":"kafka.server:name=BrokerState,type=KafkaServer","attribute":"Value"},
-{"type":"read","mbean":"java.lang:type=Memory","attribute":"HeapMemoryUsage"},
-{"type":"read","mbean":"java.lang:type=OperatingSystem","attribute":["ProcessCpuLoad","SystemCpuLoad"]},
-{"type":"read","mbean":"java.lang:name=G1 Young Generation,type=GarbageCollector","attribute":["CollectionCount","CollectionTime"]},
-{"type":"read","mbean":"java.lang:name=G1 Old Generation,type=GarbageCollector","attribute":["CollectionCount","CollectionTime"]},
-{"type":"read","mbean":"kafka.network:name=NetworkProcessorAvgIdlePercent,type=SocketServer","attribute":"Value"},
-{"type":"read","mbean":"kafka.network:name=RequestQueueSize,type=RequestChannel","attribute":"Value"},
-{"type":"read","mbean":"kafka.network:name=TotalTimeMs,request=FetchFollower,type=RequestMetrics","attribute":["Count","Mean","Max"]},
-{"type":"read","mbean":"kafka.network:name=RequestQueueTimeMs,request=FetchFollower,type=RequestMetrics","attribute":["Count","Mean","Max"]},
-{"type":"read","mbean":"kafka.network:name=LocalTimeMs,request=FetchFollower,type=RequestMetrics","attribute":["Count","Mean","Max"]},
-{"type":"read","mbean":"kafka.network:name=ResponseQueueTimeMs,request=FetchFollower,type=RequestMetrics","attribute":["Count","Mean","Max"]},
-{"type":"read","mbean":"kafka.network:name=ResponseSendTimeMs,request=FetchFollower,type=RequestMetrics","attribute":["Count","Mean","Max"]},
-{"type":"read","mbean":"kafka.server:name=UnderReplicatedPartitions,type=ReplicaManager","attribute":"Value"},
-{"type":"read","mbean":"kafka.server:name=UnderMinIsrPartitionCount,type=ReplicaManager","attribute":"Value"},
-{"type":"read","mbean":"kafka.server:name=OfflineReplicaCount,type=ReplicaManager","attribute":"Value"},
-{"type":"read","mbean":"kafka.server:name=PartitionCount,type=ReplicaManager","attribute":"Value"},
-{"type":"read","mbean":"kafka.server:name=LeaderCount,type=ReplicaManager","attribute":"Value"},
-{"type":"read","mbean":"kafka.server:name=ReassigningPartitions,type=ReplicaManager","attribute":"Value"},
-{"type":"read","mbean":"kafka.server:name=IsrShrinksPerSec,type=ReplicaManager","attribute":"Count"},
-{"type":"read","mbean":"kafka.server:name=IsrExpandsPerSec,type=ReplicaManager","attribute":"Count"},
-{"type":"read","mbean":"kafka.log:name=OfflineLogDirectoryCount,type=LogManager","attribute":"Value"},
-{"type":"read","mbean":"kafka.log:name=LogFlushRateAndTimeMs,type=LogFlushStats","attribute":["Count","Mean","Max","99thPercentile"]},
-{"type":"read","mbean":"kafka.server:name=ZooKeeperDisconnectsPerSec,type=SessionExpireListener","attribute":"Count"},
-{"type":"read","mbean":"kafka.server:name=ZooKeeperExpiresPerSec,type=SessionExpireListener","attribute":"Count"},
-{"type":"read","mbean":"kafka.server:name=BytesInPerSec,type=BrokerTopicMetrics","attribute":"Count"},
-{"type":"read","mbean":"kafka.server:name=BytesOutPerSec,type=BrokerTopicMetrics","attribute":"Count"},
-{"type":"read","mbean":"kafka.server:name=MessagesInPerSec,type=BrokerTopicMetrics","attribute":"Count"},
-{"type":"read","mbean":"kafka.controller:name=ActiveControllerCount,type=KafkaController","attribute":"Value"}
+  {"type":"read","mbean":"kafka.server:name=BrokerState,type=KafkaServer","attribute":"Value"},
+
+  {"type":"read","mbean":"java.lang:type=Memory","attribute":"HeapMemoryUsage"},
+  {"type":"read","mbean":"java.lang:type=OperatingSystem","attribute":["ProcessCpuLoad","SystemCpuLoad"]},
+  {"type":"read","mbean":"java.lang:name=G1 Young Generation,type=GarbageCollector","attribute":["CollectionCount","CollectionTime"]},
+  {"type":"read","mbean":"java.lang:name=G1 Old Generation,type=GarbageCollector","attribute":["CollectionCount","CollectionTime"]},
+
+  {"type":"read","mbean":"kafka.network:name=NetworkProcessorAvgIdlePercent,type=SocketServer","attribute":"Value"},
+  {"type":"read","mbean":"kafka.network:name=RequestQueueSize,type=RequestChannel","attribute":"Value"},
+  {"type":"read","mbean":"kafka.server:name=RequestHandlerAvgIdlePercent,type=KafkaRequestHandlerPool","attribute":["Count","OneMinuteRate","FiveMinuteRate","MeanRate"]},
+
+  {"type":"read","mbean":"kafka.network:name=TotalTimeMs,request=FetchFollower,type=RequestMetrics","attribute":["Count","Mean","Max","99thPercentile"]},
+  {"type":"read","mbean":"kafka.network:name=RequestQueueTimeMs,request=FetchFollower,type=RequestMetrics","attribute":["Count","Mean","Max","99thPercentile"]},
+  {"type":"read","mbean":"kafka.network:name=LocalTimeMs,request=FetchFollower,type=RequestMetrics","attribute":["Count","Mean","Max","99thPercentile"]},
+  {"type":"read","mbean":"kafka.network:name=ResponseQueueTimeMs,request=FetchFollower,type=RequestMetrics","attribute":["Count","Mean","Max","99thPercentile"]},
+  {"type":"read","mbean":"kafka.network:name=ResponseSendTimeMs,request=FetchFollower,type=RequestMetrics","attribute":["Count","Mean","Max","99thPercentile"]},
+
+  {"type":"read","mbean":"kafka.server:name=UnderReplicatedPartitions,type=ReplicaManager","attribute":"Value"},
+  {"type":"read","mbean":"kafka.server:name=UnderMinIsrPartitionCount,type=ReplicaManager","attribute":"Value"},
+  {"type":"read","mbean":"kafka.server:name=OfflineReplicaCount,type=ReplicaManager","attribute":"Value"},
+  {"type":"read","mbean":"kafka.server:name=PartitionCount,type=ReplicaManager","attribute":"Value"},
+  {"type":"read","mbean":"kafka.server:name=LeaderCount,type=ReplicaManager","attribute":"Value"},
+  {"type":"read","mbean":"kafka.server:name=ReassigningPartitions,type=ReplicaManager","attribute":"Value"},
+  {"type":"read","mbean":"kafka.server:name=IsrShrinksPerSec,type=ReplicaManager","attribute":"Count"},
+  {"type":"read","mbean":"kafka.server:name=IsrExpandsPerSec,type=ReplicaManager","attribute":"Count"},
+
+  {"type":"read","mbean":"kafka.log:name=OfflineLogDirectoryCount,type=LogManager","attribute":"Value"},
+  {"type":"read","mbean":"kafka.log:name=LogFlushRateAndTimeMs,type=LogFlushStats","attribute":["Count","Mean","Max","99thPercentile"]},
+
+  {"type":"read","mbean":"kafka.server:name=ZooKeeperDisconnectsPerSec,type=SessionExpireListener","attribute":"Count"},
+  {"type":"read","mbean":"kafka.server:name=ZooKeeperExpiresPerSec,type=SessionExpireListener","attribute":"Count"},
+
+  {"type":"read","mbean":"kafka.server:name=BytesInPerSec,type=BrokerTopicMetrics","attribute":"Count"},
+  {"type":"read","mbean":"kafka.server:name=BytesOutPerSec,type=BrokerTopicMetrics","attribute":"Count"},
+  {"type":"read","mbean":"kafka.server:name=MessagesInPerSec,type=BrokerTopicMetrics","attribute":"Count"},
+
+  {"type":"read","mbean":"kafka.controller:name=ActiveControllerCount,type=KafkaController","attribute":"Value"}
 ]
 '@
 
+# -----------------------------
+# Helper functions
+# -----------------------------
 function Get-Entry {
     param(
         [array]$Results,
@@ -67,32 +100,32 @@ function Get-Scalar {
         [string]$MBean
     )
 
-    $item = Get-Entry $Results $MBean
+    $entry = Get-Entry -Results $Results -MBean $MBean
 
-    if ($null -eq $item) {
+    if ($null -eq $entry) {
         return $null
     }
 
-    if ($null -ne $item.value.Value) {
-        return $item.value.Value
+    if ($null -ne $entry.value.Value) {
+        return $entry.value.Value
     }
 
-    return $item.value
+    return $entry.value
 }
 
-function Get-Object {
+function Get-MetricObject {
     param(
         [array]$Results,
         [string]$MBean
     )
 
-    $item = Get-Entry $Results $MBean
+    $entry = Get-Entry -Results $Results -MBean $MBean
 
-    if ($null -eq $item) {
+    if ($null -eq $entry) {
         return $null
     }
 
-    return $item.value
+    return $entry.value
 }
 
 function Get-Delta {
@@ -102,16 +135,13 @@ function Get-Delta {
     )
 
     if ($null -eq $Current -or $null -eq $Previous) {
-        return 'N/A'
+        return $null
     }
 
-    return [math]::Round(
-        ([double]$Current - [double]$Previous),
-        1
-    )
+    return [double]$Current - [double]$Previous
 }
 
-function Get-NumberOrNA {
+function Format-Number {
     param(
         $Value,
         [int]$Decimals = 1
@@ -121,306 +151,418 @@ function Get-NumberOrNA {
         return 'N/A'
     }
 
-    if ($Value -is [string]) {
-        return $Value
+    try {
+        return ([math]::Round([double]$Value, $Decimals)).ToString()
     }
-
-    return [math]::Round(
-        [double]$Value,
-        $Decimals
-    )
+    catch {
+        return "$Value"
+    }
 }
 
-function Show-Line {
+function Format-Integer {
+    param($Value)
+
+    if ($null -eq $Value) {
+        return 'N/A'
+    }
+
+    try {
+        return ([math]::Round([double]$Value, 0)).ToString('0')
+    }
+    catch {
+        return "$Value"
+    }
+}
+
+function Format-Bytes {
+    param($Bytes)
+
+    if ($null -eq $Bytes) {
+        return 'N/A'
+    }
+
+    $value = [double]$Bytes
+
+    if ($value -ge 1GB) {
+        return ('{0:N2} GiB' -f ($value / 1GB))
+    }
+
+    if ($value -ge 1MB) {
+        return ('{0:N2} MiB' -f ($value / 1MB))
+    }
+
+    if ($value -ge 1KB) {
+        return ('{0:N2} KiB' -f ($value / 1KB))
+    }
+
+    return ('{0:N0} B' -f $value)
+}
+
+function Get-PropertyValue {
     param(
-        [string]$Category,
-        [string]$Text,
-        [bool]$Bad = $false
+        $Object,
+        [string]$Name
     )
 
-    Write-Host $Category -ForegroundColor Yellow -NoNewline
+    if ($null -eq $Object) {
+        return $null
+    }
 
-    if ($Bad) {
+    $property = $Object.PSObject.Properties[$Name]
+
+    if ($null -eq $property) {
+        return $null
+    }
+
+    return $property.Value
+}
+
+function Is-GreaterThan {
+    param(
+        $Value,
+        [double]$Threshold
+    )
+
+    if ($null -eq $Value) {
+        return $false
+    }
+
+    try {
+        return ([double]$Value -gt $Threshold)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Is-LessThan {
+    param(
+        $Value,
+        [double]$Threshold
+    )
+
+    if ($null -eq $Value) {
+        return $false
+    }
+
+    try {
+        return ([double]$Value -lt $Threshold)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Write-MetricLine {
+    param(
+        [string]$Label,
+        [string]$Text,
+        [bool]$Warning = $false,
+        [bool]$Critical = $false
+    )
+
+    Write-Host $Label -ForegroundColor Yellow -NoNewline
+
+    if ($Critical) {
         Write-Host $Text -ForegroundColor Red
     }
+    elseif ($Warning) {
+        Write-Host $Text -ForegroundColor DarkYellow
+    }
     else {
-        Write-Host $Text
+        Write-Host $Text -ForegroundColor White
     }
 }
 
+# -----------------------------
+# Output / state
+# -----------------------------
 function Show-BrokerMetrics {
     param(
         [hashtable]$Broker,
         [array]$Results,
-        [hashtable]$Previous
+        [hashtable]$Previous,
+        [int]$IntervalSeconds
     )
 
-    $memory = Get-Object $Results 'java.lang:type=Memory'
-    $heap = $null
+    # Broker state and replication
+    $brokerState = Get-Scalar $Results 'kafka.server:name=BrokerState,type=KafkaServer'
+    $urp = Get-Scalar $Results 'kafka.server:name=UnderReplicatedPartitions,type=ReplicaManager'
+    $underMinIsr = Get-Scalar $Results 'kafka.server:name=UnderMinIsrPartitionCount,type=ReplicaManager'
+    $offlineReplicas = Get-Scalar $Results 'kafka.server:name=OfflineReplicaCount,type=ReplicaManager'
+    $partitionCount = Get-Scalar $Results 'kafka.server:name=PartitionCount,type=ReplicaManager'
+    $leaderCount = Get-Scalar $Results 'kafka.server:name=LeaderCount,type=ReplicaManager'
+    $reassigning = Get-Scalar $Results 'kafka.server:name=ReassigningPartitions,type=ReplicaManager'
+    $activeController = Get-Scalar $Results 'kafka.controller:name=ActiveControllerCount,type=KafkaController'
+    $isrShrinksCount = Get-Scalar $Results 'kafka.server:name=IsrShrinksPerSec,type=ReplicaManager'
+    $isrExpandsCount = Get-Scalar $Results 'kafka.server:name=IsrExpandsPerSec,type=ReplicaManager'
 
-    if ($null -ne $memory) {
-        $heap = $memory.HeapMemoryUsage
-    }
+    # JVM / CPU
+    $memory = Get-MetricObject $Results 'java.lang:type=Memory'
+    $heap = Get-PropertyValue $memory 'HeapMemoryUsage'
 
-    $os = Get-Object $Results 'java.lang:type=OperatingSystem'
+    $os = Get-MetricObject $Results 'java.lang:type=OperatingSystem'
 
-    $youngGc = Get-Object `
-        $Results `
-        'java.lang:name=G1 Young Generation,type=GarbageCollector'
+    $youngGc = Get-MetricObject $Results 'java.lang:name=G1 Young Generation,type=GarbageCollector'
+    $oldGc = Get-MetricObject $Results 'java.lang:name=G1 Old Generation,type=GarbageCollector'
 
-    $oldGc = Get-Object `
-        $Results `
-        'java.lang:name=G1 Old Generation,type=GarbageCollector'
-
-    $fetchTotal = Get-Object `
-        $Results `
-        'kafka.network:name=TotalTimeMs,request=FetchFollower,type=RequestMetrics'
-
-    $fetchQueue = Get-Object `
-        $Results `
-        'kafka.network:name=RequestQueueTimeMs,request=FetchFollower,type=RequestMetrics'
-
-    $fetchLocal = Get-Object `
-        $Results `
-        'kafka.network:name=LocalTimeMs,request=FetchFollower,type=RequestMetrics'
-
-    $fetchResponseQueue = Get-Object `
-        $Results `
-        'kafka.network:name=ResponseQueueTimeMs,request=FetchFollower,type=RequestMetrics'
-
-    $fetchResponseSend = Get-Object `
-        $Results `
-        'kafka.network:name=ResponseSendTimeMs,request=FetchFollower,type=RequestMetrics'
-
-    $flush = Get-Object `
-        $Results `
-        'kafka.log:name=LogFlushRateAndTimeMs,type=LogFlushStats'
-
-    $state = Get-Scalar $Results 'kafka.server:name=BrokerState,type=KafkaServer'
+    # Network / queue / request handler
     $networkIdle = Get-Scalar $Results 'kafka.network:name=NetworkProcessorAvgIdlePercent,type=SocketServer'
     $requestQueue = Get-Scalar $Results 'kafka.network:name=RequestQueueSize,type=RequestChannel'
+    $requestHandler = Get-MetricObject $Results 'kafka.server:name=RequestHandlerAvgIdlePercent,type=KafkaRequestHandlerPool'
 
-    $urp = Get-Scalar $Results 'kafka.server:name=UnderReplicatedPartitions,type=ReplicaManager'
-    $minIsr = Get-Scalar $Results 'kafka.server:name=UnderMinIsrPartitionCount,type=ReplicaManager'
-    $offlineReplicas = Get-Scalar $Results 'kafka.server:name=OfflineReplicaCount,type=ReplicaManager'
-    $partitions = Get-Scalar $Results 'kafka.server:name=PartitionCount,type=ReplicaManager'
-    $leaders = Get-Scalar $Results 'kafka.server:name=LeaderCount,type=ReplicaManager'
-    $reassigning = Get-Scalar $Results 'kafka.server:name=ReassigningPartitions,type=ReplicaManager'
-    $isrShrinks = Get-Scalar $Results 'kafka.server:name=IsrShrinksPerSec,type=ReplicaManager'
-    $isrExpands = Get-Scalar $Results 'kafka.server:name=IsrExpandsPerSec,type=ReplicaManager'
+    # Fetch request metrics
+    $fetchTotal = Get-MetricObject $Results 'kafka.network:name=TotalTimeMs,request=FetchFollower,type=RequestMetrics'
+    $fetchRequestQueue = Get-MetricObject $Results 'kafka.network:name=RequestQueueTimeMs,request=FetchFollower,type=RequestMetrics'
+    $fetchLocal = Get-MetricObject $Results 'kafka.network:name=LocalTimeMs,request=FetchFollower,type=RequestMetrics'
+    $fetchResponseQueue = Get-MetricObject $Results 'kafka.network:name=ResponseQueueTimeMs,request=FetchFollower,type=RequestMetrics'
+    $fetchResponseSend = Get-MetricObject $Results 'kafka.network:name=ResponseSendTimeMs,request=FetchFollower,type=RequestMetrics'
 
-    $offlineDirs = Get-Scalar $Results 'kafka.log:name=OfflineLogDirectoryCount,type=LogManager'
-    $zkDisconnects = Get-Scalar $Results 'kafka.server:name=ZooKeeperDisconnectsPerSec,type=SessionExpireListener'
-    $zkExpires = Get-Scalar $Results 'kafka.server:name=ZooKeeperExpiresPerSec,type=SessionExpireListener'
+    # Storage / ZK / traffic
+    $logFlush = Get-MetricObject $Results 'kafka.log:name=LogFlushRateAndTimeMs,type=LogFlushStats'
+    $offlineLogDirs = Get-Scalar $Results 'kafka.log:name=OfflineLogDirectoryCount,type=LogManager'
 
-    $bytesIn = Get-Scalar $Results 'kafka.server:name=BytesInPerSec,type=BrokerTopicMetrics'
-    $bytesOut = Get-Scalar $Results 'kafka.server:name=BytesOutPerSec,type=BrokerTopicMetrics'
-    $messagesIn = Get-Scalar $Results 'kafka.server:name=MessagesInPerSec,type=BrokerTopicMetrics'
+    $zkDisconnectsCount = Get-Scalar $Results 'kafka.server:name=ZooKeeperDisconnectsPerSec,type=SessionExpireListener'
+    $zkExpiresCount = Get-Scalar $Results 'kafka.server:name=ZooKeeperExpiresPerSec,type=SessionExpireListener'
 
-    $activeController = Get-Scalar $Results 'kafka.controller:name=ActiveControllerCount,type=KafkaController'
+    $bytesInCount = Get-Scalar $Results 'kafka.server:name=BytesInPerSec,type=BrokerTopicMetrics'
+    $bytesOutCount = Get-Scalar $Results 'kafka.server:name=BytesOutPerSec,type=BrokerTopicMetrics'
+    $messagesInCount = Get-Scalar $Results 'kafka.server:name=MessagesInPerSec,type=BrokerTopicMetrics'
 
-    $heapUsedGiB = 'N/A'
-    $heapMaxGiB = 'N/A'
-    $heapPct = 'N/A'
+    # -----------------------------
+    # Derive current JVM data
+    # -----------------------------
+    $heapUsedGiB = $null
+    $heapMaxGiB = $null
+    $heapPct = $null
 
     if ($null -ne $heap) {
-        $heapUsedGiB = [math]::Round(
-            ([double]$heap.used / 1GB),
-            2
-        )
+        $heapUsed = Get-PropertyValue $heap 'used'
+        $heapMax = Get-PropertyValue $heap 'max'
 
-        $heapMaxGiB = [math]::Round(
-            ([double]$heap.max / 1GB),
-            2
-        )
+        if ($null -ne $heapUsed) {
+            $heapUsedGiB = [double]$heapUsed / 1GB
+        }
 
-        if ([double]$heap.max -gt 0) {
-            $heapPct = [math]::Round(
-                (([double]$heap.used / [double]$heap.max) * 100),
-                1
-            )
+        if ($null -ne $heapMax -and [double]$heapMax -gt 0) {
+            $heapMaxGiB = [double]$heapMax / 1GB
+        }
+
+        if ($null -ne $heapUsed -and $null -ne $heapMax -and [double]$heapMax -gt 0) {
+            $heapPct = ([double]$heapUsed / [double]$heapMax) * 100
         }
     }
 
-    $cpuPct = 'N/A'
-    $systemCpuPct = 'N/A'
+    $processCpuPct = $null
+    $systemCpuPct = $null
 
-    if ($null -ne $os) {
-        if ($null -ne $os.ProcessCpuLoad) {
-            $cpuPct = [math]::Round(
-                ([double]$os.ProcessCpuLoad * 100),
-                1
-            )
+    $processCpuLoad = Get-PropertyValue $os 'ProcessCpuLoad'
+    $systemCpuLoad = Get-PropertyValue $os 'SystemCpuLoad'
+
+    if ($null -ne $processCpuLoad -and [double]$processCpuLoad -ge 0) {
+        $processCpuPct = [double]$processCpuLoad * 100
+    }
+
+    if ($null -ne $systemCpuLoad -and [double]$systemCpuLoad -ge 0) {
+        $systemCpuPct = [double]$systemCpuLoad * 100
+    }
+
+    $networkIdlePct = $null
+
+    if ($null -ne $networkIdle -and [double]$networkIdle -ge 0) {
+        $networkIdlePct = [double]$networkIdle * 100
+    }
+
+    # Request-handler MBean varies across releases.
+    # If available as an idle percentage, it could be a decimal value.
+    $requestHandlerOneMinuteRate = Get-PropertyValue $requestHandler 'OneMinuteRate'
+    $requestHandlerFiveMinuteRate = Get-PropertyValue $requestHandler 'FiveMinuteRate'
+    $requestHandlerMeanRate = Get-PropertyValue $requestHandler 'MeanRate'
+    $requestHandlerCount = Get-PropertyValue $requestHandler 'Count'
+
+    # -----------------------------
+    # Calculate independent deltas
+    # -----------------------------
+    $youngGcTime = Get-PropertyValue $youngGc 'CollectionTime'
+    $oldGcTime = Get-PropertyValue $oldGc 'CollectionTime'
+    $fetchCount = Get-PropertyValue $fetchTotal 'Count'
+    $flushCount = Get-PropertyValue $logFlush 'Count'
+
+    $youngGcDelta = Get-Delta $youngGcTime $Previous.YoungGcTime
+    $oldGcDelta = Get-Delta $oldGcTime $Previous.OldGcTime
+    $fetchDelta = Get-Delta $fetchCount $Previous.FetchCount
+    $flushDelta = Get-Delta $flushCount $Previous.FlushCount
+
+    $isrShrinksDelta = Get-Delta $isrShrinksCount $Previous.IsrShrinksCount
+    $isrExpandsDelta = Get-Delta $isrExpandsCount $Previous.IsrExpandsCount
+
+    $zkDisconnectsDelta = Get-Delta $zkDisconnectsCount $Previous.ZkDisconnectsCount
+    $zkExpiresDelta = Get-Delta $zkExpiresCount $Previous.ZkExpiresCount
+
+    $bytesInDelta = Get-Delta $bytesInCount $Previous.BytesInCount
+    $bytesOutDelta = Get-Delta $bytesOutCount $Previous.BytesOutCount
+    $messagesInDelta = Get-Delta $messagesInCount $Previous.MessagesInCount
+
+    $requestQueueDelta = Get-Delta $requestQueue $Previous.RequestQueue
+
+    # -----------------------------
+    # Timer fields
+    # -----------------------------
+    $fetchQueueMax = Get-PropertyValue $fetchRequestQueue 'Max'
+    $fetchLocalMax = Get-PropertyValue $fetchLocal 'Max'
+    $fetchResponseQueueMax = Get-PropertyValue $fetchResponseQueue 'Max'
+    $fetchResponseSendMax = Get-PropertyValue $fetchResponseSend 'Max'
+    $fetchTotalMax = Get-PropertyValue $fetchTotal 'Max'
+
+    $fetchQueueP99 = Get-PropertyValue $fetchRequestQueue '99thPercentile'
+    $fetchLocalP99 = Get-PropertyValue $fetchLocal '99thPercentile'
+    $fetchTotalP99 = Get-PropertyValue $fetchTotal '99thPercentile'
+
+    $flushMean = Get-PropertyValue $logFlush 'Mean'
+    $flushMax = Get-PropertyValue $logFlush 'Max'
+    $flushP99 = Get-PropertyValue $logFlush '99thPercentile'
+
+    # -----------------------------
+    # Classify queue condition
+    # -----------------------------
+    $queueStatus = 'unknown'
+    $queueMessage = 'queue metric unavailable'
+
+    if ($null -ne $requestQueue) {
+        if ([double]$requestQueue -eq 0) {
+            $queueStatus = 'healthy'
+            $queueMessage = 'empty'
         }
-
-        if ($null -ne $os.SystemCpuLoad) {
-            $systemCpuPct = [math]::Round(
-                ([double]$os.SystemCpuLoad * 100),
-                1
-            )
+        elseif ([double]$requestQueue -lt 100) {
+            $queueStatus = 'watch'
+            $queueMessage = 'non-zero'
+        }
+        elseif ([double]$requestQueue -lt 500) {
+            $queueStatus = 'warning'
+            $queueMessage = 'elevated'
+        }
+        else {
+            $queueStatus = 'critical'
+            $queueMessage = 'SATURATED or fixed capacity value'
         }
     }
 
-    $networkIdlePct = 'N/A'
-
-    if ($null -ne $networkIdle) {
-        $networkIdlePct = [math]::Round(
-            ([double]$networkIdle * 100),
-            1
-        )
-    }
-
-    $youngGcDelta = Get-Delta `
-        $(if ($youngGc) { $youngGc.CollectionTime } else { $null }) `
-        $Previous.YoungGcTime
-
-    $oldGcDelta = Get-Delta `
-        $(if ($oldGc) { $oldGc.CollectionTime } else { $null }) `
-        $Previous.OldGcTime
-
-    $fetchCountDelta = Get-Delta `
-        $(if ($fetchTotal) { $fetchTotal.Count } else { $null }) `
-        $Previous.FetchCount
-
-    $isrShrinkDelta = Get-Delta $isrShrinks $Previous.IsrShrinks
-    $isrExpandDelta = Get-Delta $isrExpands $Previous.IsrExpands
-    $zkDisconnectDelta = Get-Delta $zkDisconnects $Previous.ZkDisconnects
-    $zkExpireDelta = Get-Delta $zkExpires $Previous.ZkExpires
-    $bytesInDelta = Get-Delta $bytesIn $Previous.BytesIn
-    $bytesOutDelta = Get-Delta $bytesOut $Previous.BytesOut
-    $messagesInDelta = Get-Delta $messagesIn $Previous.MessagesIn
-
-    $flushCountDelta = Get-Delta `
-        $(if ($flush) { $flush.Count } else { $null }) `
-        $Previous.FlushCount
-
-    $fetchQueueMax = if ($fetchQueue) {
-        Get-NumberOrNA $fetchQueue.Max
-    }
-    else {
-        'N/A'
-    }
-
-    $fetchLocalMax = if ($fetchLocal) {
-        Get-NumberOrNA $fetchLocal.Max
-    }
-    else {
-        'N/A'
-    }
-
-    $fetchResponseQueueMax = if ($fetchResponseQueue) {
-        Get-NumberOrNA $fetchResponseQueue.Max
-    }
-    else {
-        'N/A'
-    }
-
-    $fetchResponseSendMax = if ($fetchResponseSend) {
-        Get-NumberOrNA $fetchResponseSend.Max
-    }
-    else {
-        'N/A'
-    }
-
-    $fetchTotalMax = if ($fetchTotal) {
-        Get-NumberOrNA $fetchTotal.Max
-    }
-    else {
-        'N/A'
-    }
-
-    $flushMean = if ($flush) {
-        Get-NumberOrNA $flush.Mean
-    }
-    else {
-        'N/A'
-    }
-
-    $flushMax = if ($flush) {
-        Get-NumberOrNA $flush.Max
-    }
-    else {
-        'N/A'
-    }
-
-    $flushP99 = if ($flush) {
-        Get-NumberOrNA $flush.'99thPercentile'
-    }
-    else {
-        'N/A'
-    }
-
+    # -----------------------------
+    # Print block
+    # -----------------------------
     Write-Host ''
     Write-Host "========== $($Broker.Name) | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==========" -ForegroundColor Cyan
 
-    $brokerLine =
-        "state=$state | partitions=$partitions | leaders=$leaders | activeController=$activeController | URP=$urp | minISR=$minIsr | offlineReplicas=$offlineReplicas | reassigning=$reassigning | ISRshrink(10s)=$isrShrinkDelta | ISRexpand(10s)=$isrExpandDelta"
+    $brokerText =
+        "state=$(Format-Integer $brokerState) | partitions=$(Format-Integer $partitionCount) | leaders=$(Format-Integer $leaderCount) | activeController=$(Format-Integer $activeController) | URP=$(Format-Integer $urp) | minISR=$(Format-Integer $underMinIsr) | offlineReplicas=$(Format-Integer $offlineReplicas) | reassigning=$(Format-Integer $reassigning) | ISRshrink(${IntervalSeconds}s)=$(Format-Integer $isrShrinksDelta) | ISRexpand(${IntervalSeconds}s)=$(Format-Integer $isrExpandsDelta)"
 
-    $brokerBad =
-        ($state -ne 3) -or
-        ($urp -gt 0) -or
-        ($minIsr -gt 0) -or
-        ($offlineReplicas -gt 0) -or
-        ($isrShrinkDelta -gt 0)
+    $brokerCritical =
+        ($brokerState -ne 3) -or
+        (Is-GreaterThan $urp 0) -or
+        (Is-GreaterThan $underMinIsr 0) -or
+        (Is-GreaterThan $offlineReplicas 0) -or
+        (Is-GreaterThan $isrShrinksDelta 0)
 
-    Show-Line 'BROKER    ' $brokerLine $brokerBad
+    Write-MetricLine -Label 'BROKER    ' -Text $brokerText -Critical $brokerCritical
 
-    $zkLine =
-        "disconnects(total)=$zkDisconnects | disconnects(10s)=$zkDisconnectDelta | expiries(total)=$zkExpires | expiries(10s)=$zkExpireDelta"
+    $zkText =
+        "disconnects(total)=$(Format-Integer $zkDisconnectsCount) | disconnects(${IntervalSeconds}s)=$(Format-Integer $zkDisconnectsDelta) | expiries(total)=$(Format-Integer $zkExpiresCount) | expiries(${IntervalSeconds}s)=$(Format-Integer $zkExpiresDelta)"
 
-    $zkBad =
-        ($zkDisconnectDelta -gt 0) -or
-        ($zkExpireDelta -gt 0)
+    $zkCritical =
+        (Is-GreaterThan $zkDisconnectsDelta 0) -or
+        (Is-GreaterThan $zkExpiresDelta 0)
 
-    Show-Line 'ZK        ' $zkLine $zkBad
+    Write-MetricLine -Label 'ZK        ' -Text $zkText -Critical $zkCritical
 
-    $jvmLine =
-        "heapUsed=$heapUsedGiB GiB | heapMax=$heapMaxGiB GiB | heapUsedPct=$heapPct% | processCPU=$cpuPct% | systemCPU=$systemCpuPct% | youngGC(10s)=$youngGcDelta ms | oldGC(10s)=$oldGcDelta ms"
+    $jvmText =
+        "heapUsed=$(Format-Number $heapUsedGiB 2) GiB | heapMax=$(Format-Number $heapMaxGiB 2) GiB | heapUsedPct=$(Format-Number $heapPct 1)% | processCPU=$(Format-Number $processCpuPct 1)% | systemCPU=$(Format-Number $systemCpuPct 1)% | youngGC(${IntervalSeconds}s)=$(Format-Integer $youngGcDelta) ms | oldGC(${IntervalSeconds}s)=$(Format-Integer $oldGcDelta) ms"
 
-    $jvmBad =
-        ($oldGcDelta -ne 'N/A' -and [double]$oldGcDelta -gt 1000)
+    $jvmCritical =
+        (Is-GreaterThan $heapPct 90) -or
+        (Is-GreaterThan $oldGcDelta 1000)
 
-    Show-Line 'JVM       ' $jvmLine $jvmBad
+    $jvmWarning =
+        (Is-GreaterThan $heapPct 80) -or
+        (Is-GreaterThan $youngGcDelta 3000)
 
-    $networkLine =
-        "networkIdle=$networkIdlePct% | requestQueue=$requestQueue | bytesIn(10s)=$bytesInDelta | bytesOut(10s)=$bytesOutDelta | messagesIn(10s)=$messagesInDelta"
+    Write-MetricLine -Label 'JVM       ' -Text $jvmText -Warning $jvmWarning -Critical $jvmCritical
 
-    $networkBad =
-        ($networkIdlePct -ne 'N/A' -and [double]$networkIdlePct -lt 5)
+    $handlerInfo = 'N/A'
 
-    Show-Line 'NETWORK   ' $networkLine $networkBad
+    if ($null -ne $requestHandler) {
+        $handlerInfo =
+            "count=$(Format-Integer $requestHandlerCount) | oneMinRate=$(Format-Number $requestHandlerOneMinuteRate 3) | fiveMinRate=$(Format-Number $requestHandlerFiveMinuteRate 3) | meanRate=$(Format-Number $requestHandlerMeanRate 3)"
+    }
 
-    $fetchLine =
-        "fetches(10s)=$fetchCountDelta | queueMax=$fetchQueueMax ms | localMax=$fetchLocalMax ms | responseQueueMax=$fetchResponseQueueMax ms | responseSendMax=$fetchResponseSendMax ms | totalMax=$fetchTotalMax ms"
+    $networkText =
+        "networkIdle=$(Format-Number $networkIdlePct 1)% | requestQueue=$(Format-Integer $requestQueue) | queueDelta(${IntervalSeconds}s)=$(Format-Integer $requestQueueDelta) | queueStatus=$queueStatus ($queueMessage) | handlerMetric=$handlerInfo"
 
-    Show-Line 'FETCH     ' $fetchLine $false
+    $networkCritical =
+        ($queueStatus -eq 'critical') -or
+        (Is-LessThan $networkIdlePct 5)
 
-    $storageLine =
-        "flushes(10s)=$flushCountDelta | flushMean=$flushMean ms | flushP99=$flushP99 ms | flushMax=$flushMax ms | offlineLogDirs=$offlineDirs"
+    $networkWarning =
+        ($queueStatus -eq 'warning') -or
+        (Is-LessThan $networkIdlePct 15)
 
-    $storageBad = ($offlineDirs -gt 0)
+    Write-MetricLine -Label 'NETWORK   ' -Text $networkText -Warning $networkWarning -Critical $networkCritical
 
-    Show-Line 'STORAGE   ' $storageLine $storageBad
+    $fetchText =
+        "fetches(${IntervalSeconds}s)=$(Format-Integer $fetchDelta) | reqQueueP99=$(Format-Number $fetchQueueP99 1) ms | reqQueueMax=$(Format-Number $fetchQueueMax 1) ms | localP99=$(Format-Number $fetchLocalP99 1) ms | localMax=$(Format-Number $fetchLocalMax 1) ms | responseQueueMax=$(Format-Number $fetchResponseQueueMax 1) ms | responseSendMax=$(Format-Number $fetchResponseSendMax 1) ms | totalP99=$(Format-Number $fetchTotalP99 1) ms | totalMax=$(Format-Number $fetchTotalMax 1) ms"
 
+    $fetchCritical =
+        (Is-GreaterThan $fetchLocalP99 1000) -or
+        (Is-GreaterThan $fetchQueueP99 1000)
+
+    $fetchWarning =
+        (Is-GreaterThan $fetchLocalP99 100) -or
+        (Is-GreaterThan $fetchQueueP99 100)
+
+    Write-MetricLine -Label 'FETCH     ' -Text $fetchText -Warning $fetchWarning -Critical $fetchCritical
+
+    $storageText =
+        "flushes(${IntervalSeconds}s)=$(Format-Integer $flushDelta) | flushMean=$(Format-Number $flushMean 1) ms | flushP99=$(Format-Number $flushP99 1) ms | flushMax=$(Format-Number $flushMax 1) ms | offlineLogDirs=$(Format-Integer $offlineLogDirs)"
+
+    $storageCritical =
+        (Is-GreaterThan $offlineLogDirs 0) -or
+        (Is-GreaterThan $flushP99 1000)
+
+    $storageWarning =
+        (Is-GreaterThan $flushP99 100)
+
+    Write-MetricLine -Label 'STORAGE   ' -Text $storageText -Warning $storageWarning -Critical $storageCritical
+
+    $trafficText =
+        "bytesIn(${IntervalSeconds}s)=$(Format-Bytes $bytesInDelta) | bytesOut(${IntervalSeconds}s)=$(Format-Bytes $bytesOutDelta) | messagesIn(${IntervalSeconds}s)=$(Format-Integer $messagesInDelta)"
+
+    Write-MetricLine -Label 'TRAFFIC   ' -Text $trafficText
+
+    # Return the exact counters needed for this broker's next poll.
     return @{
-        YoungGcTime = if ($youngGc) { $youngGc.CollectionTime } else { $null }
-        OldGcTime = if ($oldGc) { $oldGc.CollectionTime } else { $null }
-        FetchCount = if ($fetchTotal) { $fetchTotal.Count } else { $null }
-        IsrShrinks = $isrShrinks
-        IsrExpands = $isrExpands
-        ZkDisconnects = $zkDisconnects
-        ZkExpires = $zkExpires
-        BytesIn = $bytesIn
-        BytesOut = $bytesOut
-        MessagesIn = $messagesIn
-        FlushCount = if ($flush) { $flush.Count } else { $null }
+        YoungGcTime        = $youngGcTime
+        OldGcTime          = $oldGcTime
+        FetchCount         = $fetchCount
+        FlushCount         = $flushCount
+        IsrShrinksCount    = $isrShrinksCount
+        IsrExpandsCount    = $isrExpandsCount
+        ZkDisconnectsCount = $zkDisconnectsCount
+        ZkExpiresCount     = $zkExpiresCount
+        BytesInCount       = $bytesInCount
+        BytesOutCount      = $bytesOutCount
+        MessagesInCount    = $messagesInCount
+        RequestQueue       = $requestQueue
     }
 }
 
+# -----------------------------
+# Main monitoring loop
+# -----------------------------
 $previousByBroker = @{}
 
-Write-Host 'Kafka broker 5 + 6 watcher started. New broker blocks append every 10 seconds. Ctrl+C to stop.' -ForegroundColor Cyan
-Write-Host 'Values marked (10s) are deltas. Timer Max/Mean/P99 values are cumulative/high-water values since metric/JVM startup.' -ForegroundColor DarkGray
+Write-Host ''
+Write-Host 'Kafka broker 5 + 6 watcher started. New blocks append every 10 seconds. Press Ctrl+C to stop.' -ForegroundColor Cyan
+Write-Host 'Queue guidance: 0=healthy; 1-99=watch; 100-499=elevated; 500=saturated or metric capacity. Do not increase queued.max.requests based on this alone.' -ForegroundColor DarkGray
+Write-Host 'Timer Mean/P99/Max values are cumulative since JVM / metric startup. Values marked (10s) are per-poll deltas.' -ForegroundColor DarkGray
 
 while ($true) {
     foreach ($broker in $brokers) {
@@ -433,19 +575,22 @@ while ($true) {
                 -TimeoutSec 15 `
                 -ErrorAction Stop
 
-            $old = $previousByBroker[$broker.Name]
+            $previous = $previousByBroker[$broker.Name]
 
-            if ($null -eq $old) {
-                $old = @{}
+            if ($null -eq $previous) {
+                $previous = @{}
             }
 
             $previousByBroker[$broker.Name] = Show-BrokerMetrics `
                 -Broker $broker `
                 -Results $result `
-                -Previous $old
+                -Previous $previous `
+                -IntervalSeconds $intervalSeconds
         }
         catch {
-            Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $($broker.Name) JOLOKIA FAILED: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host ''
+            Write-Host "========== $($broker.Name) | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==========" -ForegroundColor Cyan
+            Write-Host "JOLOKIA FAILED: $($_.Exception.Message)" -ForegroundColor Red
         }
     }
 
