@@ -1,71 +1,25 @@
-$Jolokia = 'http://cto-eep-obs-prod-uk-azb4001-broker6.uk.hsbc:7777/jolokia/'
+$url = 'http://cto-eep-obs-prod-uk-azb4001-broker6.uk.hsbc:7777/jolokia/'
 
-$Body = @'
+$body = @'
 [
-  {
-    "type": "read",
-    "mbean": "kafka.server:type=KafkaServer,name=BrokerState",
-    "attribute": "Value"
-  },
-  {
-    "type": "read",
-    "mbean": "java.lang:type=Memory",
-    "attribute": "HeapMemoryUsage"
-  },
-  {
-    "type": "read",
-    "mbean": "java.lang:type=OperatingSystem",
-    "attribute": [
-      "ProcessCpuLoad",
-      "SystemCpuLoad",
-      "ProcessCpuTime",
-      "AvailableProcessors"
-    ]
-  },
-  {
-    "type": "read",
-    "mbean": "java.lang:type=GarbageCollector,name=G1 Young Generation",
-    "attribute": [
-      "CollectionCount",
-      "CollectionTime"
-    ]
-  },
-  {
-    "type": "read",
-    "mbean": "java.lang:type=GarbageCollector,name=G1 Old Generation",
-    "attribute": [
-      "CollectionCount",
-      "CollectionTime"
-    ]
-  },
-  {
-    "type": "read",
-    "mbean": "kafka.network:type=SocketServer,name=NetworkProcessorAvgIdlePercent",
-    "attribute": "Value"
-  },
-  {
-    "type": "read",
-    "mbean": "kafka.server:type=ReplicaManager,name=UnderReplicatedPartitions",
-    "attribute": "Value"
-  },
-  {
-    "type": "read",
-    "mbean": "kafka.server:type=ReplicaManager,name=UnderMinIsrPartitionCount",
-    "attribute": "Value"
+  {"type":"read","mbean":"kafka.server:type=KafkaServer,name=BrokerState","attribute":"Value"},
+  {"type":"read","mbean":"java.lang:type=Memory","attribute":"HeapMemoryUsage"},
+  {"type":"read","mbean":"java.lang:type=OperatingSystem","attribute":["ProcessCpuLoad","SystemCpuLoad"]},
+  {"type":"read","mbean":"java.lang:type=GarbageCollector,name=G1 Young Generation","attribute":["CollectionCount","CollectionTime"]},
+  {"type":"read","mbean":"java.lang:type=GarbageCollector,name=G1 Old Generation","attribute":["CollectionCount","CollectionTime"]},
+
+  {"type":"read","mbean":"kafka.server:type=ReplicaManager,name=UnderReplicatedPartitions","attribute":"Value"},
+  {"type":"read","mbean":"kafka.server:type=ReplicaManager,name=UnderMinIsrPartitionCount","attribute":"Value"},
+  {"type":"read","mbean":"kafka.server:type=ReplicaManager,name=OfflineReplicaCount","attribute":"Value"},
+  {"type":"read","mbean":"kafka.server:type=ReplicaManager,name=PartitionCount","attribute":"Value"},
+  {"type":"read","mbean":"kafka.server:type=ReplicaManager,name=LeaderCount","attribute":"Value"},
+  {"type":"read","mbean":"kafka.server:type=ReplicaManager,name=ReassigningPartitions","attribute":"Value"}
+]
 '@
 
-$response = Invoke-RestMethod `
-  -Uri $Jolokia `
-  -Method Post `
-  -ContentType 'application/json' `
-  -Body $Body `
-  -TimeoutSec 15
-
-$response | ForEach-Object {
-  [PSCustomObject]@{
-    MBean   = $_.request.mbean
-    Status  = $_.status
-    Value   = $_.value
-    Error   = $_.error
-  }
-} | Format-List
+Invoke-RestMethod -Uri $url -Method Post -ContentType 'application/json' -Body $body |
+  Select-Object @{N='MBean';E={$_.request.mbean}},
+                @{N='Value';E={$_.value}},
+                @{N='Status';E={$_.status}},
+                @{N='Error';E={$_.error}} |
+  Format-Table -AutoSize -Wrap
