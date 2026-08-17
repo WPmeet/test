@@ -1,0 +1,54 @@
+$Jolokia = 'http://cto-eep-obs-prod-uk-azb4001-broker6.uk.hsbc:7777/jolokia/'
+
+$Body = @'
+[
+  {
+    "type": "read",
+    "mbean": "kafka.server:type=KafkaServer,name=BrokerState",
+    "attribute": "Value"
+  },
+  {
+    "type": "read",
+    "mbean": "java.lang:type=Memory",
+    "attribute": "HeapMemoryUsage"
+  },
+  {
+    "type": "read",
+    "mbean": "java.lang:type=OperatingSystem",
+    "attribute": [
+      "ProcessCpuLoad",
+      "SystemCpuLoad",
+      "ProcessCpuTime",
+      "AvailableProcessors"
+    ]
+  },
+  {
+    "type": "read",
+    "mbean": "java.lang:type=GarbageCollector,name=G1 Young Generation",
+    "attribute": [
+      "CollectionCount",
+      "CollectionTime"
+    ]
+  },
+  {
+    "type": "read",
+    "mbean": "java.lang:type=GarbageCollector,name=G1 Old Generation",
+    "attribute": [
+      "CollectionCount",
+      "CollectionTime"
+    ]
+  },
+  {
+    "type": "read",
+    "mbean": "kafka.network:type=SocketServer,name=NetworkProcessorAvgIdlePercent",
+    "attribute": "Value"
+  },
+  {
+    "type": "read",
+    "mbean": "kafka.server:type=ReplicaManager,name=UnderReplicatedPartitions",
+    "attribute": "Value"
+  },
+  {
+    "type": "read",
+    "mbean": "kafka.server:type=ReplicaManager,name=UnderMinIsrPartitionCount",
+    "attribute": "Value"
