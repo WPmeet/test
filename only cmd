@@ -1,0 +1,1 @@
+http://cto-eep-obs-prod-uk-azb4001-broker5.uk.hsbc:7777/jolokia/read/kafka.server:type=ReplicaManager,name=ObserverInIsrCount/Value
