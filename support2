@@ -1,0 +1,453 @@
+#!/bin/bash
+
+set -u
+set -o pipefail
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+namespace="cto-eep-obs-prod-uk"
+
+# Pod logs
+MAX_PARALLEL_LOGS=4
+
+# KafkaTopic / CFK CR collection
+MAX_PARALLEL_CR=25
+
+# Optional namespace argument:
+# ./support-bundle.sh my-namespace
+if [ -n "${1:-}" ]; then
+    namespace="$1"
+fi
+
+
+# ============================================================
+# OUTPUT DIRECTORY
+# ============================================================
+
+echo "============================================================"
+echo " Kubernetes Support Bundle"
+echo " Namespace              : $namespace"
+echo " Parallel pod logs      : $MAX_PARALLEL_LOGS"
+echo " Parallel CRs per group : $MAX_PARALLEL_CR"
+echo "============================================================"
+
+output_dir="./k8s-info-${namespace}-$(date +%Y%m%d-%H%M%S)"
+
+mkdir -p "$output_dir"
+cd "$output_dir" || exit 1
+
+mkdir -p logs
+mkdir -p kafkatopics
+mkdir -p cfk-resources
+mkdir -p statefulsets
+mkdir -p configmaps
+
+echo "Output directory: $(pwd)"
+echo
+
+
+# ============================================================
+# POD INFORMATION
+# ============================================================
+
+collect_pods() {
+
+    echo "[PODS] Starting..."
+
+    kubectl get pods \
+        -n "$namespace" \
+        -o wide \
+        > pods.txt 2>&1
+
+    echo "[PODS] Finished"
+}
+
+
+# ============================================================
+# DEPLOYMENTS
+# ============================================================
+
+collect_deployments() {
+
+    echo "[DEPLOYMENTS] Starting..."
+
+    kubectl get deployments \
+        -n "$namespace" \
+        -o yaml \
+        > deployment.yaml 2>&1
+
+    echo "[DEPLOYMENTS] Finished"
+}
+
+
+# ============================================================
+# EVENTS
+# ============================================================
+
+collect_events() {
+
+    echo "[EVENTS] Starting..."
+
+    kubectl get events \
+        -n "$namespace" \
+        --sort-by=.metadata.creationTimestamp \
+        > events.txt 2>&1
+
+    echo "[EVENTS] Finished"
+}
+
+
+# ============================================================
+# POD LOGS
+#
+# Maximum 4 log collections at a time
+# ============================================================
+
+collect_logs() {
+
+    echo "[LOGS] Starting..."
+    echo "[LOGS] Maximum parallel: $MAX_PARALLEL_LOGS"
+
+    pods=$(kubectl get pods \
+        -n "$namespace" \
+        --no-headers \
+        -o custom-columns=":metadata.name" \
+        2>/dev/null)
+
+    running=0
+
+    for pod in $pods; do
+
+        echo "[LOGS] Collecting: $pod"
+
+        kubectl logs "$pod" \
+            -n "$namespace" \
+            --all-containers=true \
+            > "logs/${pod}.log" 2>&1 &
+
+        running=$((running + 1))
+
+        if [ "$running" -ge "$MAX_PARALLEL_LOGS" ]; then
+
+            echo "[LOGS] Waiting for batch of $MAX_PARALLEL_LOGS..."
+
+            wait
+            running=0
+        fi
+
+    done
+
+    # Remaining jobs
+    wait
+
+    echo "[LOGS] Finished"
+}
+
+
+# ============================================================
+# STATEFULSETS
+# ============================================================
+
+collect_statefulsets() {
+
+    echo "[STATEFULSETS] Starting..."
+
+    statefulsets=$(kubectl get sts \
+        -n "$namespace" \
+        --no-headers \
+        -o custom-columns=":metadata.name" \
+        2>/dev/null)
+
+    for sts in $statefulsets; do
+
+        echo "[STATEFULSETS] Collecting: $sts"
+
+        kubectl get sts "$sts" \
+            -n "$namespace" \
+            -o yaml \
+            > "statefulsets/${sts}.yaml" 2>&1 &
+
+    done
+
+    wait
+
+    echo "[STATEFULSETS] Finished"
+}
+
+
+# ============================================================
+# KAFKA TOPICS
+#
+# 25 KafkaTopic CRs collected concurrently.
+# Once 25 finish, next batch starts.
+# ============================================================
+
+collect_kafkatopics() {
+
+    echo "[KAFKATOPICS] Starting..."
+    echo "[KAFKATOPICS] Maximum parallel: $MAX_PARALLEL_CR"
+
+    topics=$(kubectl get kafkatopics.platform.confluent.io \
+        -n "$namespace" \
+        --no-headers \
+        -o custom-columns=":metadata.name" \
+        2>/dev/null)
+
+    running=0
+
+    for topic in $topics; do
+
+        echo "[KAFKATOPICS] Collecting: $topic"
+
+        kubectl get kafkatopic.platform.confluent.io "$topic" \
+            -n "$namespace" \
+            -o yaml \
+            > "kafkatopics/${topic}.yaml" 2>&1 &
+
+        running=$((running + 1))
+
+        if [ "$running" -ge "$MAX_PARALLEL_CR" ]; then
+
+            echo "[KAFKATOPICS] Waiting for batch of $MAX_PARALLEL_CR..."
+
+            wait
+            running=0
+        fi
+
+    done
+
+    # Remaining CRs
+    wait
+
+    echo "[KAFKATOPICS] Finished"
+}
+
+
+# ============================================================
+# OTHER CONFLUENT / CFK CUSTOM RESOURCES
+#
+# Excludes KafkaTopic because it has its own collector above.
+#
+# 25 CRs collected concurrently.
+# ============================================================
+
+collect_cfk_resources() {
+
+    echo "[CFK] Starting..."
+    echo "[CFK] Maximum parallel: $MAX_PARALLEL_CR"
+
+    running=0
+
+    resource_types=$(kubectl api-resources \
+        --verbs=list \
+        --namespaced=true \
+        -o name 2>/dev/null \
+        | grep "platform.confluent.io" \
+        | grep -v "^kafkatopics.platform.confluent.io$" || true)
+
+    for cr in $resource_types; do
+
+        echo "[CFK] Checking resource type: $cr"
+
+        names=$(kubectl get "$cr" \
+            -n "$namespace" \
+            --no-headers \
+            -o custom-columns=":metadata.name" \
+            2>/dev/null)
+
+        for name in $names; do
+
+            safe_cr=$(echo "$cr" | tr '/.' '__')
+
+            echo "[CFK] Collecting: $cr/$name"
+
+            kubectl get "$cr" "$name" \
+                -n "$namespace" \
+                -o yaml \
+                > "cfk-resources/${safe_cr}-${name}.yaml" 2>&1 &
+
+            running=$((running + 1))
+
+            if [ "$running" -ge "$MAX_PARALLEL_CR" ]; then
+
+                echo "[CFK] Waiting for batch of $MAX_PARALLEL_CR..."
+
+                wait
+                running=0
+            fi
+
+        done
+
+    done
+
+    # Remaining CR jobs
+    wait
+
+    echo "[CFK] Finished"
+}
+
+
+# ============================================================
+# SHARED CONFIGMAPS
+# ============================================================
+
+collect_configmaps() {
+
+    echo "[CONFIGMAPS] Starting..."
+
+    configmaps=$(kubectl get configmaps \
+        -n "$namespace" \
+        --no-headers \
+        -o custom-columns=":metadata.name" \
+        2>/dev/null \
+        | grep "shared-config" || true)
+
+    for configmap in $configmaps; do
+
+        echo "[CONFIGMAPS] Collecting: $configmap"
+
+        kubectl get configmap "$configmap" \
+            -n "$namespace" \
+            -o yaml \
+            > "configmaps/${configmap}.yaml" 2>&1 &
+
+    done
+
+    wait
+
+    echo "[CONFIGMAPS] Finished"
+}
+
+
+# ============================================================
+# START EVERYTHING IN PARALLEL
+# ============================================================
+
+echo
+echo "============================================================"
+echo " Starting collectors in parallel"
+echo "============================================================"
+echo
+
+collect_pods &
+PID_PODS=$!
+
+collect_deployments &
+PID_DEPLOYMENTS=$!
+
+collect_events &
+PID_EVENTS=$!
+
+collect_logs &
+PID_LOGS=$!
+
+collect_statefulsets &
+PID_STATEFULSETS=$!
+
+collect_kafkatopics &
+PID_KAFKATOPICS=$!
+
+collect_cfk_resources &
+PID_CFK=$!
+
+collect_configmaps &
+PID_CONFIGMAPS=$!
+
+
+echo "Collector PIDs:"
+echo " Pods          : $PID_PODS"
+echo " Deployments   : $PID_DEPLOYMENTS"
+echo " Events        : $PID_EVENTS"
+echo " Logs          : $PID_LOGS"
+echo " StatefulSets  : $PID_STATEFULSETS"
+echo " KafkaTopics   : $PID_KAFKATOPICS"
+echo " CFK CRs       : $PID_CFK"
+echo " ConfigMaps    : $PID_CONFIGMAPS"
+
+echo
+
+
+# ============================================================
+# WAIT FOR ALL COLLECTORS
+# ============================================================
+
+failed=0
+
+
+wait "$PID_PODS" || {
+    echo "[ERROR] Pods collection failed"
+    failed=1
+}
+
+
+wait "$PID_DEPLOYMENTS" || {
+    echo "[ERROR] Deployment collection failed"
+    failed=1
+}
+
+
+wait "$PID_EVENTS" || {
+    echo "[ERROR] Event collection failed"
+    failed=1
+}
+
+
+wait "$PID_LOGS" || {
+    echo "[ERROR] Log collection failed"
+    failed=1
+}
+
+
+wait "$PID_STATEFULSETS" || {
+    echo "[ERROR] StatefulSet collection failed"
+    failed=1
+}
+
+
+wait "$PID_KAFKATOPICS" || {
+    echo "[ERROR] KafkaTopic collection failed"
+    failed=1
+}
+
+
+wait "$PID_CFK" || {
+    echo "[ERROR] CFK resource collection failed"
+    failed=1
+}
+
+
+wait "$PID_CONFIGMAPS" || {
+    echo "[ERROR] ConfigMap collection failed"
+    failed=1
+}
+
+
+# ============================================================
+# FINISH
+# ============================================================
+
+echo
+echo "============================================================"
+
+if [ "$failed" -eq 0 ]; then
+
+    echo " Collection completed successfully."
+
+else
+
+    echo " Collection completed with one or more errors."
+
+fi
+
+echo
+echo "Output:"
+echo "$(pwd)"
+echo
+echo "Parallel settings:"
+echo " Pod logs      : $MAX_PARALLEL_LOGS"
+echo " KafkaTopics   : $MAX_PARALLEL_CR"
+echo " Other CFK CRs : $MAX_PARALLEL_CR"
+
+echo "============================================================"
