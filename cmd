@@ -2,6 +2,15 @@
 PID=$(pgrep -f 'kafka.Kafka')
 ls -l /proc/$PID/fd 2>/dev/null | grep "$(pwd)" | grep '\.log'
 ls -1 *.log | sort > /tmp/all.log
+kafka-configs \
+  --bootstrap-server '<bootstrap-host>:<port>' \
+  --command-config '<client.properties>' \
+  --entity-type topics \
+  --entity-name '<topic-name>' \
+  --describe \
+  --all |
+  grep -E '^(cleanup\.policy|retention\.ms|retention\.bytes|segment\.ms|segment\.bytes|file\.delete\.delay\.ms)='
+
 
 ls -l /proc/1/fd 2>/dev/null | grep "$(pwd)/" | grep '\.log$' | awk -F/ '{print $NF}' | sort -u > /tmp/open.log
 
