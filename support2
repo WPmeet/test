@@ -3,6 +3,7 @@
 set -u
 set -o pipefail
 
+
 # ============================================================
 # CONFIGURATION
 # ============================================================
@@ -10,18 +11,30 @@ set -o pipefail
 namespace="cto-eep-obs-prod-uk"
 
 # Pod logs:
-# 4 in background -> wait -> next 4
+# 4 pods started in background together
 LOG_BATCH_SIZE=4
 
-# CFK CRs:
-# 50 objects in background -> wait -> next 50
+# CFK objects:
+# 50 objects started in background together.
 # Change to 25 / 50 / 100 as required.
 CR_BATCH_SIZE=50
 
+# How many CFK resource TYPES can be processed together.
+# Example:
+# KafkaTopics + ConfluentRoleBindings simultaneously.
+CFK_TYPES_IN_PARALLEL=2
+
+# Retry an individual failed CFK kubectl GET
 MAX_RETRIES=3
 
+# Show background process status every N seconds
+STATUS_INTERVAL=2
+
+
 # Optional namespace:
+#
 # ./support-bundle.sh my-namespace
+#
 if [ -n "${1:-}" ]; then
     namespace="$1"
 fi
@@ -34,28 +47,126 @@ fi
 echo "============================================================"
 echo " Kubernetes / CFK Support Bundle"
 echo "============================================================"
-echo " Namespace       : $namespace"
-echo " Log batch size  : $LOG_BATCH_SIZE"
-echo " CR batch size   : $CR_BATCH_SIZE"
-echo " Retries         : $MAX_RETRIES"
+echo " Namespace               : $namespace"
+echo " Log batch size          : $LOG_BATCH_SIZE"
+echo " CFK object batch size   : $CR_BATCH_SIZE"
+echo " CFK types in parallel   : $CFK_TYPES_IN_PARALLEL"
+echo " Retry attempts          : $MAX_RETRIES"
+echo " PID status interval     : ${STATUS_INTERVAL}s"
 echo "============================================================"
+
 
 output_dir="./k8s-info-${namespace}-$(date +%Y%m%d-%H%M%S)"
 
 mkdir -p "$output_dir"
 cd "$output_dir" || exit 1
 
+
 mkdir -p logs
 mkdir -p deployments
 mkdir -p statefulsets
 mkdir -p configmaps
+
 mkdir -p cfk-resources
 mkdir -p cfk-lists
 mkdir -p cfk-summaries
 
+
 echo
-echo "Output directory: $(pwd)"
+echo "Output directory:"
+echo "$(pwd)"
 echo
+
+
+# ============================================================
+# GENERIC PID WAIT / MONITOR FUNCTION
+#
+# Usage:
+#
+# wait_for_pid_batch "NAME" pid1 pid2 pid3 ...
+#
+# It:
+#   - keeps checking running jobs
+#   - shows number still running
+#   - waits until all have completed
+#   - waits/reaps every PID
+#   - checks return codes
+# ============================================================
+
+wait_for_pid_batch() {
+
+    batch_name="$1"
+    shift
+
+    pids="$@"
+
+    total=0
+
+    for pid in $pids; do
+        total=$((total + 1))
+    done
+
+
+    if [ "$total" -eq 0 ]; then
+        return 0
+    fi
+
+
+    echo
+    echo "------------------------------------------------------------"
+    echo "[$batch_name] Tracking $total background processes"
+    echo "[$batch_name] PIDs: $pids"
+    echo "------------------------------------------------------------"
+
+
+    while true; do
+
+        running_jobs=$(jobs -pr 2>/dev/null | wc -l | tr -d ' ')
+
+        echo "[$batch_name] Total=$total  Still-running=$running_jobs"
+
+        if [ "$running_jobs" -eq 0 ]; then
+            break
+        fi
+
+        sleep "$STATUS_INTERVAL"
+
+    done
+
+
+    failed_jobs=0
+
+
+    for pid in $pids; do
+
+        wait "$pid"
+        rc=$?
+
+        if [ "$rc" -eq 0 ]; then
+
+            echo "[$batch_name] PID $pid -> OK"
+
+        else
+
+            echo "[$batch_name] PID $pid -> FAILED rc=$rc"
+
+            failed_jobs=$((failed_jobs + 1))
+        fi
+
+    done
+
+
+    echo "[$batch_name] All background processes finished"
+    echo "[$batch_name] Failed processes: $failed_jobs"
+    echo
+
+
+    if [ "$failed_jobs" -gt 0 ]; then
+        return 1
+    fi
+
+    return 0
+}
 
 
 # ============================================================
@@ -71,38 +182,11 @@ collect_pods() {
         -o wide \
         > pods.txt 2>&1
 
-    echo "[PODS] Finished"
-}
+    rc=$?
 
+    echo "[PODS] Finished rc=$rc"
 
-# ============================================================
-# DEPLOYMENTS
-# ============================================================
-
-collect_deployments() {
-
-    echo "[DEPLOYMENTS] Starting..."
-
-    kubectl get deployments \
-        -n "$namespace" \
-        --no-headers \
-        -o custom-columns=":metadata.name" \
-        > deployment-list.txt 2>/dev/null
-
-    while IFS= read -r deployment; do
-
-        [ -z "$deployment" ] && continue
-
-        kubectl get deployment "$deployment" \
-            -n "$namespace" \
-            -o yaml \
-            > "deployments/${deployment}.yaml" 2>&1 &
-
-    done < deployment-list.txt
-
-    wait
-
-    echo "[DEPLOYMENTS] Finished"
+    return "$rc"
 }
 
 
@@ -119,68 +203,105 @@ collect_events() {
         --sort-by=.metadata.creationTimestamp \
         > events.txt 2>&1
 
-    echo "[EVENTS] Finished"
+    rc=$?
+
+    echo "[EVENTS] Finished rc=$rc"
+
+    return "$rc"
 }
 
 
 # ============================================================
-# POD LOGS
-#
-# 4 logs in background -> wait -> next 4
+# DEPLOYMENTS
 # ============================================================
 
-collect_logs() {
+collect_deployments() {
 
-    echo "[LOGS] Starting..."
-    echo "[LOGS] Batch size: $LOG_BATCH_SIZE"
+    echo "[DEPLOYMENTS] Starting..."
 
-    kubectl get pods \
+
+    if ! kubectl get deployments \
         -n "$namespace" \
         --no-headers \
         -o custom-columns=":metadata.name" \
-        > pod-list.txt 2>/dev/null
+        > deployment-list.txt 2>deployment-list-error.txt; then
 
-    EXPECTED=$(grep -cve '^[[:space:]]*$' pod-list.txt)
+        echo "[DEPLOYMENTS] Unable to retrieve deployment list"
 
-    echo "[LOGS] Pods discovered: $EXPECTED"
+        return 1
+    fi
 
+
+    EXPECTED=$(grep -cve '^[[:space:]]*$' deployment-list.txt)
+
+    echo "[DEPLOYMENTS] Expected: $EXPECTED"
+
+
+    pids=""
     batch_count=0
     batch_number=1
 
-    while IFS= read -r pod; do
 
-        [ -z "$pod" ] && continue
+    while IFS= read -r deployment; do
 
-        echo "[LOGS] Collecting: $pod"
+        [ -z "$deployment" ] && continue
 
-        kubectl logs "$pod" \
+
+        kubectl get deployment "$deployment" \
             -n "$namespace" \
-            --all-containers=true \
-            > "logs/${pod}.log" 2>&1 &
+            -o yaml \
+            > "deployments/${deployment}.yaml" 2>&1 &
+
+
+        pid=$!
+
+        pids="$pids $pid"
+
+        echo "[DEPLOYMENTS] $deployment -> PID $pid"
 
         batch_count=$((batch_count + 1))
 
-        if [ "$batch_count" -ge "$LOG_BATCH_SIZE" ]; then
 
-            echo "[LOGS] Waiting for batch $batch_number..."
+        if [ "$batch_count" -ge "$CR_BATCH_SIZE" ]; then
 
-            wait
+            wait_for_pid_batch \
+                "DEPLOYMENTS-BATCH-$batch_number" \
+                $pids || true
 
+            pids=""
             batch_count=0
+
             batch_number=$((batch_number + 1))
         fi
 
-    done < pod-list.txt
+
+    done < deployment-list.txt
+
 
     if [ "$batch_count" -gt 0 ]; then
-        wait
+
+        wait_for_pid_batch \
+            "DEPLOYMENTS-BATCH-$batch_number" \
+            $pids || true
+
     fi
 
-    COLLECTED=$(find logs -type f -name "*.log" | wc -l | tr -d ' ')
 
-    echo "[LOGS] Expected : $EXPECTED"
-    echo "[LOGS] Files    : $COLLECTED"
-    echo "[LOGS] Finished"
+    COLLECTED=$(find deployments \
+        -type f \
+        -name "*.yaml" \
+        | wc -l | tr -d ' ')
+
+
+    echo "[DEPLOYMENTS] Expected=$EXPECTED Collected=$COLLECTED"
+
+
+    if [ "$EXPECTED" -ne "$COLLECTED" ]; then
+        return 1
+    fi
+
+
+    return 0
 }
 
 
@@ -192,26 +313,90 @@ collect_statefulsets() {
 
     echo "[STATEFULSETS] Starting..."
 
-    kubectl get sts \
+
+    if ! kubectl get statefulsets \
         -n "$namespace" \
         --no-headers \
         -o custom-columns=":metadata.name" \
-        > statefulset-list.txt 2>/dev/null
+        > statefulset-list.txt \
+        2> statefulset-list-error.txt; then
+
+        echo "[STATEFULSETS] Unable to retrieve StatefulSet list"
+
+        return 1
+    fi
+
+
+    EXPECTED=$(grep -cve '^[[:space:]]*$' statefulset-list.txt)
+
+    echo "[STATEFULSETS] Expected: $EXPECTED"
+
+
+    pids=""
+    batch_count=0
+    batch_number=1
+
 
     while IFS= read -r sts; do
 
         [ -z "$sts" ] && continue
 
-        kubectl get sts "$sts" \
+
+        kubectl get statefulset "$sts" \
             -n "$namespace" \
             -o yaml \
             > "statefulsets/${sts}.yaml" 2>&1 &
 
+
+        pid=$!
+
+        pids="$pids $pid"
+
+        echo "[STATEFULSETS] $sts -> PID $pid"
+
+        batch_count=$((batch_count + 1))
+
+
+        if [ "$batch_count" -ge "$CR_BATCH_SIZE" ]; then
+
+            wait_for_pid_batch \
+                "STATEFULSETS-BATCH-$batch_number" \
+                $pids || true
+
+            pids=""
+            batch_count=0
+
+            batch_number=$((batch_number + 1))
+        fi
+
+
     done < statefulset-list.txt
 
-    wait
 
-    echo "[STATEFULSETS] Finished"
+    if [ "$batch_count" -gt 0 ]; then
+
+        wait_for_pid_batch \
+            "STATEFULSETS-BATCH-$batch_number" \
+            $pids || true
+
+    fi
+
+
+    COLLECTED=$(find statefulsets \
+        -type f \
+        -name "*.yaml" \
+        | wc -l | tr -d ' ')
+
+
+    echo "[STATEFULSETS] Expected=$EXPECTED Collected=$COLLECTED"
+
+
+    if [ "$EXPECTED" -ne "$COLLECTED" ]; then
+        return 1
+    fi
+
+
+    return 0
 }
 
 
@@ -223,31 +408,301 @@ collect_configmaps() {
 
     echo "[CONFIGMAPS] Starting..."
 
-    kubectl get configmaps \
+
+    if ! kubectl get configmaps \
         -n "$namespace" \
         --no-headers \
         -o custom-columns=":metadata.name" \
-        > configmap-list.txt 2>/dev/null
+        > configmap-list.txt \
+        2> configmap-list-error.txt; then
+
+        echo "[CONFIGMAPS] Unable to retrieve ConfigMap list"
+
+        return 1
+    fi
+
+
+    EXPECTED=$(grep -cve '^[[:space:]]*$' configmap-list.txt)
+
+    echo "[CONFIGMAPS] Expected: $EXPECTED"
+
+
+    pids=""
+    batch_count=0
+    batch_number=1
+
 
     while IFS= read -r configmap; do
 
         [ -z "$configmap" ] && continue
+
 
         kubectl get configmap "$configmap" \
             -n "$namespace" \
             -o yaml \
             > "configmaps/${configmap}.yaml" 2>&1 &
 
+
+        pid=$!
+
+        pids="$pids $pid"
+
+        echo "[CONFIGMAPS] $configmap -> PID $pid"
+
+        batch_count=$((batch_count + 1))
+
+
+        if [ "$batch_count" -ge "$CR_BATCH_SIZE" ]; then
+
+            wait_for_pid_batch \
+                "CONFIGMAP-BATCH-$batch_number" \
+                $pids || true
+
+            pids=""
+            batch_count=0
+
+            batch_number=$((batch_number + 1))
+        fi
+
+
     done < configmap-list.txt
 
-    wait
 
-    echo "[CONFIGMAPS] Finished"
+    if [ "$batch_count" -gt 0 ]; then
+
+        wait_for_pid_batch \
+            "CONFIGMAP-BATCH-$batch_number" \
+            $pids || true
+
+    fi
+
+
+    COLLECTED=$(find configmaps \
+        -type f \
+        -name "*.yaml" \
+        | wc -l | tr -d ' ')
+
+
+    echo "[CONFIGMAPS] Expected=$EXPECTED Collected=$COLLECTED"
+
+
+    if [ "$EXPECTED" -ne "$COLLECTED" ]; then
+        return 1
+    fi
+
+
+    return 0
+}
+
+
+# ============================================================
+# POD LOGS
+#
+# 4 background processes per batch.
+# PIDs are explicitly tracked.
+# ============================================================
+
+collect_logs() {
+
+    echo "[LOGS] Starting..."
+
+
+    if ! kubectl get pods \
+        -n "$namespace" \
+        --no-headers \
+        -o custom-columns=":metadata.name" \
+        > pod-list.txt \
+        2> pod-list-error.txt; then
+
+        echo "[LOGS] Unable to retrieve pod list"
+
+        return 1
+    fi
+
+
+    EXPECTED=$(grep -cve '^[[:space:]]*$' pod-list.txt)
+
+    echo "[LOGS] Pods expected: $EXPECTED"
+
+
+    pids=""
+    batch_count=0
+    batch_number=1
+
+
+    while IFS= read -r pod; do
+
+        [ -z "$pod" ] && continue
+
+
+        kubectl logs "$pod" \
+            -n "$namespace" \
+            --all-containers=true \
+            > "logs/${pod}.log" 2>&1 &
+
+
+        pid=$!
+
+        pids="$pids $pid"
+
+
+        echo "[LOGS] $pod -> PID $pid"
+
+
+        batch_count=$((batch_count + 1))
+
+
+        if [ "$batch_count" -ge "$LOG_BATCH_SIZE" ]; then
+
+            wait_for_pid_batch \
+                "LOG-BATCH-$batch_number" \
+                $pids || true
+
+
+            pids=""
+            batch_count=0
+
+            batch_number=$((batch_number + 1))
+        fi
+
+
+    done < pod-list.txt
+
+
+    if [ "$batch_count" -gt 0 ]; then
+
+        wait_for_pid_batch \
+            "LOG-BATCH-$batch_number" \
+            $pids || true
+
+    fi
+
+
+    COLLECTED=$(find logs \
+        -type f \
+        -name "*.log" \
+        | wc -l | tr -d ' ')
+
+
+    echo
+    echo "[LOGS] Expected=$EXPECTED"
+    echo "[LOGS] Files=$COLLECTED"
+    echo
+
+
+    return 0
+}
+
+
+# ============================================================
+# DISCOVER ALL CFK RESOURCE TYPES AND CAPTURE COUNTS/LISTS
+#
+# IMPORTANT:
+#
+# This happens BEFORE CFK object collection begins.
+#
+# Therefore we know exactly what should be collected.
+# ============================================================
+
+prepare_cfk_lists() {
+
+    echo
+    echo "============================================================"
+    echo " Discovering ALL CFK resource types"
+    echo "============================================================"
+
+
+    if ! kubectl api-resources \
+        --verbs=list \
+        --namespaced=true \
+        -o name \
+        2> cfk-api-resources-error.txt \
+        | grep "platform.confluent.io" \
+        > cfk-resource-types.txt; then
+
+        echo "[CFK] Unable to discover CFK resource types"
+
+        return 1
+    fi
+
+
+    TYPE_COUNT=$(grep -cve '^[[:space:]]*$' cfk-resource-types.txt)
+
+
+    echo "[CFK] Resource types discovered: $TYPE_COUNT"
+    echo
+
+
+    TOTAL_EXPECTED=0
+
+
+    while IFS= read -r resource_type; do
+
+        [ -z "$resource_type" ] && continue
+
+
+        safe_type=$(echo "$resource_type" | tr '/.' '__')
+
+        list_file="cfk-lists/${safe_type}.txt"
+
+
+        echo "[CFK] Getting initial list: $resource_type"
+
+
+        if kubectl get "$resource_type" \
+            -n "$namespace" \
+            --no-headers \
+            -o custom-columns=":metadata.name" \
+            > "$list_file" \
+            2> "cfk-lists/${safe_type}-error.txt"; then
+
+
+            EXPECTED=$(grep -cve '^[[:space:]]*$' "$list_file")
+
+
+            echo "[CFK] $resource_type -> EXPECTED=$EXPECTED"
+
+
+            TOTAL_EXPECTED=$((TOTAL_EXPECTED + EXPECTED))
+
+
+            {
+                echo "ResourceType=$resource_type"
+                echo "Expected=$EXPECTED"
+            } > "cfk-summaries/${safe_type}-initial.txt"
+
+
+        else
+
+            echo "[CFK] ERROR listing $resource_type"
+
+            return 1
+
+        fi
+
+
+    done < cfk-resource-types.txt
+
+
+    echo
+    echo "============================================================"
+    echo " CFK TOTAL OBJECTS BEFORE COLLECTION: $TOTAL_EXPECTED"
+    echo "============================================================"
+    echo
+
+
+    echo "$TOTAL_EXPECTED" > cfk-total-expected.txt
+
+
+    return 0
 }
 
 
 # ============================================================
 # COLLECT ONE CFK OBJECT
+#
+# Retries failures.
+# Only valid/successful YAML gets final .yaml extension.
 # ============================================================
 
 collect_one_cfk_object() {
@@ -256,70 +711,91 @@ collect_one_cfk_object() {
     object_name="$2"
     safe_type="$3"
 
-    attempt=1
 
     resource_dir="cfk-resources/${safe_type}"
 
     mkdir -p "$resource_dir"
 
+
     tmp_file="${resource_dir}/${object_name}.yaml.tmp"
+
     final_file="${resource_dir}/${object_name}.yaml"
 
+
+    attempt=1
+
+
     while [ "$attempt" -le "$MAX_RETRIES" ]; do
+
 
         if kubectl get "$resource_type" "$object_name" \
             -n "$namespace" \
             -o yaml \
             > "$tmp_file" 2>&1; then
 
-            # Validate that this looks like Kubernetes YAML
+
             if grep -q "^apiVersion:" "$tmp_file" && \
                grep -q "^kind:" "$tmp_file" && \
                grep -q "^metadata:" "$tmp_file"; then
 
+
                 mv "$tmp_file" "$final_file"
 
-                echo "[CFK][$safe_type] OK: $object_name"
+
+                echo "[CFK][$resource_type] OK $object_name"
+
 
                 return 0
+
             fi
+
         fi
+
 
         rm -f "$tmp_file"
 
-        echo "[CFK][$safe_type] Retry $attempt/$MAX_RETRIES: $object_name"
+
+        echo "[CFK][$resource_type] Retry $attempt/$MAX_RETRIES: $object_name"
+
 
         attempt=$((attempt + 1))
 
+
         sleep 2
+
     done
 
-    echo "$object_name" >> "cfk-summaries/${safe_type}-failed.txt"
 
-    echo "[CFK][$safe_type] FAILED: $object_name"
+    echo "$object_name" \
+        >> "cfk-summaries/${safe_type}-failed.txt"
+
+
+    echo "[CFK][$resource_type] FAILED $object_name"
+
 
     return 1
 }
 
 
 # ============================================================
-# COLLECT ONE CFK RESOURCE TYPE
+# COLLECT ONE COMPLETE CFK RESOURCE TYPE
 #
-# Example:
+# Example with CR_BATCH_SIZE=50:
 #
-# KafkaTopic:
-#   50 background GETs
-#   wait
-#   next 50
+# KafkaTopics:
 #
-# CFRB:
-#   50 background GETs
-#   wait
-#   next 50
+# objects 1-50
+#     -> 50 background processes
+#     -> record all 50 PIDs
+#     -> monitor PIDs
+#     -> wait until all complete
+#
+# objects 51-100
+#     -> same
 #
 # etc.
 #
-# Each resource type gets BEFORE and AFTER validation.
+# Expected count is from PRE-CAPTURED list.
 # ============================================================
 
 collect_cfk_type() {
@@ -328,51 +804,34 @@ collect_cfk_type() {
 
     safe_type=$(echo "$resource_type" | tr '/.' '__')
 
-    resource_dir="cfk-resources/${safe_type}"
+
     list_file="cfk-lists/${safe_type}.txt"
-    error_file="cfk-lists/${safe_type}-error.txt"
+
     failed_file="cfk-summaries/${safe_type}-failed.txt"
+
     summary_file="cfk-summaries/${safe_type}-summary.txt"
+
+    resource_dir="cfk-resources/${safe_type}"
+
 
     mkdir -p "$resource_dir"
 
     rm -f "$failed_file"
 
-    echo
-    echo "------------------------------------------------------------"
-    echo "[CFK][$resource_type] Getting initial object list..."
-    echo "------------------------------------------------------------"
-
-    if ! kubectl get "$resource_type" \
-        -n "$namespace" \
-        --no-headers \
-        -o custom-columns=":metadata.name" \
-        > "$list_file" \
-        2> "$error_file"; then
-
-        echo "[CFK][$resource_type] ERROR: Cannot get object list"
-
-        {
-            echo "ResourceType=$resource_type"
-            echo "Status=LIST_FAILED"
-        } > "$summary_file"
-
-        return 1
-    fi
-
-
-    # ========================================================
-    # COUNT BEFORE COLLECTION
-    # ========================================================
 
     EXPECTED=$(grep -cve '^[[:space:]]*$' "$list_file")
 
-    echo "[CFK][$resource_type] EXPECTED BEFORE: $EXPECTED"
+
+    echo
+    echo "============================================================"
+    echo " CFK TYPE: $resource_type"
+    echo " Expected objects: $EXPECTED"
+    echo " Batch size: $CR_BATCH_SIZE"
+    echo "============================================================"
 
 
     if [ "$EXPECTED" -eq 0 ]; then
 
-        echo "[CFK][$resource_type] No objects found"
 
         {
             echo "ResourceType=$resource_type"
@@ -382,43 +841,56 @@ collect_cfk_type() {
             echo "Status=OK"
         } > "$summary_file"
 
+
         return 0
+
     fi
 
 
-    # ========================================================
-    # BATCH COLLECTION
-    # ========================================================
-
     batch_count=0
     batch_number=1
+    pids=""
 
 
     while IFS= read -r object_name; do
 
         [ -z "$object_name" ] && continue
 
+
         collect_one_cfk_object \
             "$resource_type" \
             "$object_name" \
             "$safe_type" &
+
+
+        pid=$!
+
+
+        pids="$pids $pid"
+
+
+        echo "[CFK][$resource_type] $object_name -> PID $pid"
+
 
         batch_count=$((batch_count + 1))
 
 
         if [ "$batch_count" -ge "$CR_BATCH_SIZE" ]; then
 
-            echo
-            echo "[CFK][$resource_type]"
-            echo "Waiting for batch $batch_number ($CR_BATCH_SIZE objects)..."
 
-            wait
+            wait_for_pid_batch \
+                "CFK-${safe_type}-BATCH-${batch_number}" \
+                $pids || true
 
-            echo "[CFK][$resource_type] Batch $batch_number finished"
+
+            pids=""
 
             batch_count=0
+
             batch_number=$((batch_number + 1))
+
         fi
+
 
     done < "$list_file"
 
@@ -429,18 +901,16 @@ collect_cfk_type() {
 
     if [ "$batch_count" -gt 0 ]; then
 
-        echo
-        echo "[CFK][$resource_type]"
-        echo "Waiting for final batch $batch_number ($batch_count objects)..."
 
-        wait
+        wait_for_pid_batch \
+            "CFK-${safe_type}-BATCH-${batch_number}" \
+            $pids || true
 
-        echo "[CFK][$resource_type] Final batch finished"
     fi
 
 
     # ========================================================
-    # COUNT AFTER COLLECTION
+    # COUNT SUCCESSFUL OUTPUTS
     # ========================================================
 
     COLLECTED=$(find "$resource_dir" \
@@ -452,13 +922,16 @@ collect_cfk_type() {
 
     FAILED=0
 
+
     if [ -f "$failed_file" ]; then
+
         FAILED=$(grep -cve '^[[:space:]]*$' "$failed_file")
+
     fi
 
 
     # ========================================================
-    # VALIDATE BEFORE VS AFTER
+    # BEFORE / AFTER CHECK
     # ========================================================
 
     echo
@@ -473,27 +946,31 @@ collect_cfk_type() {
 
     if [ "$EXPECTED" -eq "$COLLECTED" ]; then
 
+
         STATUS="OK"
+
 
         echo " Status           : OK - COUNTS MATCH"
 
+
     else
+
 
         STATUS="MISMATCH"
 
+
         MISSING=$((EXPECTED - COLLECTED))
+
 
         echo " Status           : WARNING - COUNTS DO NOT MATCH"
         echo " Missing          : $MISSING"
 
+
     fi
+
 
     echo "============================================================"
 
-
-    # ========================================================
-    # SAVE SUMMARY
-    # ========================================================
 
     {
         echo "ResourceType=$resource_type"
@@ -506,89 +983,102 @@ collect_cfk_type() {
 
 
     if [ "$EXPECTED" -ne "$COLLECTED" ]; then
+
         return 1
+
     fi
+
 
     return 0
 }
 
 
 # ============================================================
-# ALL CFK RESOURCES
+# COLLECT ALL CFK RESOURCE TYPES
 #
-# Dynamically discovers EVERYTHING under platform.confluent.io
+# Resource TYPES themselves also run in background.
 #
-# This therefore includes whatever exists in the cluster:
+# CFK_TYPES_IN_PARALLEL=2 means:
 #
-# KafkaTopic
-# ConfluentRolebinding / CFRB
-# Kafka
-# Connect
-# SchemaRegistry
-# KsqlDB
-# ControlCenter
-# KafkaRestProxy
-# Connector
-# etc.
+# KafkaTopic collector  --------\
+#                               > run together
+# CFRB collector        --------/
 #
-# No hardcoded list needed.
+# Then next two resource types.
+#
+# Each type internally processes CR_BATCH_SIZE objects at once.
 # ============================================================
 
 collect_all_cfk_resources() {
 
     echo
     echo "============================================================"
-    echo " Discovering CFK resource types"
-    echo "============================================================"
-
-    kubectl api-resources \
-        --verbs=list \
-        --namespaced=true \
-        -o name 2>/dev/null \
-        | grep "platform.confluent.io" \
-        > cfk-resource-types.txt
-
-
-    RESOURCE_TYPE_COUNT=$(grep -cve '^[[:space:]]*$' cfk-resource-types.txt)
-
-
-    echo "CFK resource types discovered: $RESOURCE_TYPE_COUNT"
-    echo
-
-    cat cfk-resource-types.txt
-
-    echo
+    echo " Starting ALL CFK CR collection"
     echo "============================================================"
 
 
-    overall_cfk_failed=0
+    type_pids=""
+    type_count=0
+    type_batch=1
 
-
-    # ========================================================
-    # Collect each CR TYPE.
-    #
-    # Within each type:
-    # 50 objects run in background at once.
-    # ========================================================
 
     while IFS= read -r resource_type; do
 
         [ -z "$resource_type" ] && continue
 
-        collect_cfk_type "$resource_type" || {
-            overall_cfk_failed=1
-        }
+
+        collect_cfk_type "$resource_type" &
+
+
+        pid=$!
+
+
+        type_pids="$type_pids $pid"
+
+
+        echo "[CFK-TYPE] $resource_type -> PID $pid"
+
+
+        type_count=$((type_count + 1))
+
+
+        if [ "$type_count" -ge "$CFK_TYPES_IN_PARALLEL" ]; then
+
+
+            wait_for_pid_batch \
+                "CFK-TYPE-GROUP-$type_batch" \
+                $type_pids || true
+
+
+            type_pids=""
+
+            type_count=0
+
+            type_batch=$((type_batch + 1))
+
+        fi
+
 
     done < cfk-resource-types.txt
 
 
+    if [ "$type_count" -gt 0 ]; then
+
+
+        wait_for_pid_batch \
+            "CFK-TYPE-GROUP-$type_batch" \
+            $type_pids || true
+
+    fi
+
+
     # ========================================================
-    # CREATE MASTER CFK SUMMARY
+    # MASTER CFK SUMMARY
     # ========================================================
 
     echo
     echo "============================================================"
-    echo " CFK MASTER COLLECTION SUMMARY"
+    echo " CFK MASTER SUMMARY"
     echo "============================================================"
 
 
@@ -611,18 +1101,42 @@ collect_all_cfk_resources() {
     TOTAL_EXPECTED=0
     TOTAL_COLLECTED=0
     TOTAL_FAILED=0
+    MASTER_FAILED=0
 
 
-    for summary in cfk-summaries/*-summary.txt; do
+    while IFS= read -r resource_type; do
 
-        [ -f "$summary" ] || continue
+        [ -z "$resource_type" ] && continue
 
 
-        RESOURCE=$(grep "^ResourceType=" "$summary" | cut -d= -f2-)
+        safe_type=$(echo "$resource_type" | tr '/.' '__')
+
+        summary="cfk-summaries/${safe_type}-summary.txt"
+
+
+        if [ ! -f "$summary" ]; then
+
+            printf "%-55s %-10s %-10s %-10s %-12s\n" \
+                "$resource_type" \
+                "?" \
+                "?" \
+                "?" \
+                "NO_SUMMARY"
+
+
+            MASTER_FAILED=1
+
+            continue
+
+        fi
+
 
         EXPECTED=$(grep "^Expected=" "$summary" | cut -d= -f2-)
+
         COLLECTED=$(grep "^Collected=" "$summary" | cut -d= -f2-)
+
         FAILED=$(grep "^Failed=" "$summary" | cut -d= -f2-)
+
         STATUS=$(grep "^Status=" "$summary" | cut -d= -f2-)
 
 
@@ -633,7 +1147,7 @@ collect_all_cfk_resources() {
 
 
         printf "%-55s %-10s %-10s %-10s %-12s\n" \
-            "$RESOURCE" \
+            "$resource_type" \
             "$EXPECTED" \
             "$COLLECTED" \
             "$FAILED" \
@@ -641,10 +1155,18 @@ collect_all_cfk_resources() {
 
 
         TOTAL_EXPECTED=$((TOTAL_EXPECTED + EXPECTED))
+
         TOTAL_COLLECTED=$((TOTAL_COLLECTED + COLLECTED))
+
         TOTAL_FAILED=$((TOTAL_FAILED + FAILED))
 
-    done
+
+        if [ "$STATUS" != "OK" ]; then
+            MASTER_FAILED=1
+        fi
+
+
+    done < cfk-resource-types.txt
 
 
     echo
@@ -662,34 +1184,56 @@ collect_all_cfk_resources() {
     } > cfk-master-summary.txt
 
 
-    if [ "$TOTAL_EXPECTED" -eq "$TOTAL_COLLECTED" ]; then
+    if [ "$TOTAL_EXPECTED" -eq "$TOTAL_COLLECTED" ] && \
+       [ "$MASTER_FAILED" -eq 0 ]; then
+
 
         echo
-        echo "CFK STATUS: ALL OBJECT COUNTS MATCH"
+        echo "CFK STATUS: ALL COUNTS MATCH"
+
+        return 0
+
 
     else
 
+
         echo
-        echo "CFK STATUS: OBJECT COUNT MISMATCH"
+        echo "CFK STATUS: COLLECTION INCOMPLETE"
 
-        overall_cfk_failed=1
+        return 1
+
     fi
-
-
-    echo "============================================================"
-
-
-    return "$overall_cfk_failed"
 }
 
 
 # ============================================================
-# START TOP LEVEL COLLECTIONS IN PARALLEL
+# PREPARE CFK LISTS / COUNTS FIRST
+#
+# Do this BEFORE starting main parallel collection so we
+# establish expected CFK object counts first.
 # ============================================================
 
 echo
 echo "============================================================"
-echo " Starting top-level collectors in parallel"
+echo " PRE-COLLECTION CFK INVENTORY"
+echo "============================================================"
+
+
+if ! prepare_cfk_lists; then
+
+    echo "Unable to build initial CFK inventory."
+    exit 1
+
+fi
+
+
+# ============================================================
+# START TOP-LEVEL COLLECTORS IN PARALLEL
+# ============================================================
+
+echo
+echo "============================================================"
+echo " STARTING TOP-LEVEL COLLECTION"
 echo "============================================================"
 echo
 
@@ -697,26 +1241,33 @@ echo
 collect_pods &
 PID_PODS=$!
 
+
 collect_deployments &
 PID_DEPLOYMENTS=$!
+
 
 collect_events &
 PID_EVENTS=$!
 
+
 collect_logs &
 PID_LOGS=$!
+
 
 collect_statefulsets &
 PID_STATEFULSETS=$!
 
+
 collect_configmaps &
 PID_CONFIGMAPS=$!
+
 
 collect_all_cfk_resources &
 PID_CFK=$!
 
 
-echo "Collector PIDs:"
+echo "Top-level collector PIDs:"
+echo
 echo " Pods          : $PID_PODS"
 echo " Deployments   : $PID_DEPLOYMENTS"
 echo " Events        : $PID_EVENTS"
@@ -728,50 +1279,64 @@ echo
 
 
 # ============================================================
-# WAIT FOR TOP LEVEL COLLECTIONS
+# WAIT FOR TOP-LEVEL COLLECTORS
 # ============================================================
 
 failed=0
 
 
 wait "$PID_PODS" || {
+
     echo "[ERROR] Pods collection failed"
+
     failed=1
 }
 
 
 wait "$PID_DEPLOYMENTS" || {
-    echo "[ERROR] Deployments collection failed"
+
+    echo "[ERROR] Deployment collection failed"
+
     failed=1
 }
 
 
 wait "$PID_EVENTS" || {
-    echo "[ERROR] Events collection failed"
+
+    echo "[ERROR] Event collection failed"
+
     failed=1
 }
 
 
 wait "$PID_LOGS" || {
-    echo "[ERROR] Logs collection failed"
+
+    echo "[ERROR] Log collection failed"
+
     failed=1
 }
 
 
 wait "$PID_STATEFULSETS" || {
-    echo "[ERROR] StatefulSets collection failed"
+
+    echo "[ERROR] StatefulSet collection failed"
+
     failed=1
 }
 
 
 wait "$PID_CONFIGMAPS" || {
-    echo "[ERROR] ConfigMaps collection failed"
+
+    echo "[ERROR] ConfigMap collection failed"
+
     failed=1
 }
 
 
 wait "$PID_CFK" || {
-    echo "[ERROR] One or more CFK resources are incomplete"
+
+    echo "[ERROR] One or more CFK object collections incomplete"
+
     failed=1
 }
 
@@ -785,6 +1350,7 @@ echo
 echo "============================================================"
 echo " FINAL COLLECTION SUMMARY"
 echo "============================================================"
+
 
 if [ "$failed" -eq 0 ]; then
 
@@ -801,21 +1367,25 @@ echo
 echo "Namespace:"
 echo "$namespace"
 
+
 echo
 echo "Output directory:"
 echo "$(pwd)"
 
-echo
-echo "Batch configuration:"
-echo " Pod logs : $LOG_BATCH_SIZE"
-echo " CFK CRs  : $CR_BATCH_SIZE"
 
 echo
+echo "Batch configuration:"
+echo " Pod logs              : $LOG_BATCH_SIZE per batch"
+echo " CFK objects            : $CR_BATCH_SIZE per batch"
+echo " CFK resource types     : $CFK_TYPES_IN_PARALLEL simultaneously"
+echo " Retry failed CFK GETs  : $MAX_RETRIES"
 
 
 if [ -f cfk-master-summary.txt ]; then
 
+    echo
     echo "CFK totals:"
+
     cat cfk-master-summary.txt
 
 fi
