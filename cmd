@@ -1,3 +1,8 @@
+
+PID=$(pgrep -f 'kafka.Kafka')
+ls -l /proc/$PID/fd 2>/dev/null | grep "$(pwd)" | grep '\.log'
+
+
 # jk-5-6-request-queue.ps1
 # Kafka / Jolokia watcher for broker 5 and broker 6.
 #
