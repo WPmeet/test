@@ -1,0 +1,179 @@
+#!/bin/bash
+
+set -u
+set -x
+
+namespace="cto-eep-obs-prod-uk"
+
+if [ -n "${1:-}" ]; then
+    namespace="$1"
+fi
+
+echo "--- Collecting Kubernetes Information for Namespace: ${namespace} ---"
+
+output_dir="./k8s-info-${namespace}-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$output_dir"
+cd "$output_dir" || exit 1
+
+
+# ---------------------------------------------------------
+# 1. POD INFORMATION
+# ---------------------------------------------------------
+collect_pods() {
+    echo "Capturing pod information..."
+    kubectl get pods -n "$namespace" -o wide > pods.txt 2>&1
+}
+
+
+# ---------------------------------------------------------
+# 2. DEPLOYMENTS
+# ---------------------------------------------------------
+collect_deployments() {
+    echo "Capturing deployment information..."
+    kubectl get deployment -n "$namespace" -o yaml > deployment.yaml 2>&1
+}
+
+
+# ---------------------------------------------------------
+# 3. EVENTS
+# ---------------------------------------------------------
+collect_events() {
+    echo "Capturing events..."
+    kubectl get events \
+        -n "$namespace" \
+        --sort-by=.metadata.creationTimestamp \
+        > event.txt 2>&1
+}
+
+
+# ---------------------------------------------------------
+# 4. POD LOGS
+# ---------------------------------------------------------
+collect_logs() {
+    echo "Capturing pod logs..."
+
+    for pod in $(kubectl get pods -n "$namespace" \
+        --no-headers \
+        -o custom-columns=":metadata.name"); do
+
+        echo "Collecting logs for pod: $pod"
+
+        kubectl logs "$pod" \
+            -n "$namespace" \
+            --all-containers=true \
+            > "${pod}.log" 2>&1 &
+    done
+
+    # Wait for all pod log commands
+    wait
+}
+
+
+# ---------------------------------------------------------
+# 5. STATEFULSETS
+# ---------------------------------------------------------
+collect_statefulsets() {
+    echo "Capturing StatefulSet configurations..."
+
+    for sts in $(kubectl get sts -n "$namespace" \
+        --no-headers \
+        -o custom-columns=":metadata.name"); do
+
+        kubectl get sts "$sts" \
+            -n "$namespace" \
+            -o yaml \
+            > "${sts}-statefulset.yaml" 2>&1
+    done
+}
+
+
+# ---------------------------------------------------------
+# 6. CONFLUENT CUSTOM RESOURCES
+# ---------------------------------------------------------
+collect_confluent_crs() {
+    echo "Capturing custom resource configurations (platform.confluent.io)..."
+
+    kubectl get all -n "$namespace" 2>/dev/null |
+    grep "platform.confluent.io" |
+    awk '{print $1}' |
+    while read -r cr; do
+
+        kind=$(echo "$cr" | cut -d/ -f1)
+        name=$(echo "$cr" | cut -d/ -f2)
+
+        echo "Collecting config for Custom resource: $kind/$name"
+
+        kubectl get "$kind" "$name" \
+            -n "$namespace" \
+            -o yaml \
+            > "${name}.yaml" 2>&1
+    done
+}
+
+
+# ---------------------------------------------------------
+# 7. SHARED CONFIGMAPS
+# ---------------------------------------------------------
+collect_configmaps() {
+    echo "Capturing shared configmaps..."
+
+    for configmap in $(kubectl get configmaps \
+        -n "$namespace" \
+        --no-headers \
+        -o custom-columns=":metadata.name" |
+        grep "shared-config"); do
+
+        echo "Collecting config for ConfigMap: $configmap"
+
+        kubectl get cm "$configmap" \
+            -n "$namespace" \
+            -o yaml \
+            > "${configmap}-configmap.yaml" 2>&1
+    done
+}
+
+
+# =========================================================
+# START EVERYTHING IN PARALLEL
+# =========================================================
+
+collect_pods &
+pid_pods=$!
+
+collect_deployments &
+pid_deployments=$!
+
+collect_events &
+pid_events=$!
+
+collect_logs &
+pid_logs=$!
+
+collect_statefulsets &
+pid_sts=$!
+
+collect_confluent_crs &
+pid_crs=$!
+
+collect_configmaps &
+pid_cm=$!
+
+
+echo ""
+echo "Collectors started in background..."
+echo "PIDs: $pid_pods $pid_deployments $pid_events $pid_logs $pid_sts $pid_crs $pid_cm"
+echo ""
+
+
+# Wait for ALL collectors
+wait "$pid_pods"
+wait "$pid_deployments"
+wait "$pid_events"
+wait "$pid_logs"
+wait "$pid_sts"
+wait "$pid_crs"
+wait "$pid_cm"
+
+
+echo ""
+echo "--- Kubernetes Information collection complete. Files saved in: $(pwd) ---"
