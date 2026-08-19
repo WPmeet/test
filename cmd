@@ -1,6 +1,10 @@
 
 PID=$(pgrep -f 'kafka.Kafka')
 ls -l /proc/$PID/fd 2>/dev/null | grep "$(pwd)" | grep '\.log'
+ls -1 *.log | sort > /tmp/all.log
+
+ls -l /proc/1/fd 2>/dev/null | grep "$(pwd)/" | grep '\.log$' | awk -F/ '{print $NF}' | sort -u > /tmp/open.log
+
 
 for f in *.log; do
   if ! ls -l /proc/1/fd 2>/dev/null | grep -Fq "/$(basename "$f")"; then
@@ -33,7 +37,7 @@ $intervalSeconds = 10
 $brokers = @(
     @{
         Name = 'broker-5'
-        Url  = 'http://cto-eep-obs-prod-uk-azb4001-broker5.uk.hsbc:7777/jolokia/'
+         Url  = 'http://cto-eep-obs-prod-uk-azb4001-broker5.uk.hsbc:7777/jolokia/'
     },
     @{
         Name = 'broker-6'
