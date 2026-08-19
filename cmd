@@ -2,6 +2,12 @@
 PID=$(pgrep -f 'kafka.Kafka')
 ls -l /proc/$PID/fd 2>/dev/null | grep "$(pwd)" | grep '\.log'
 
+for f in *.log; do
+  if ! ls -l /proc/1/fd 2>/dev/null | grep -Fq "/$(basename "$f")"; then
+    echo "$f"
+  fi
+done
+
 
 # jk-5-6-request-queue.ps1
 # Kafka / Jolokia watcher for broker 5 and broker 6.
