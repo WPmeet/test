@@ -1,179 +1,341 @@
 #!/bin/bash
 
 set -u
-set -x
+set -o pipefail
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
 namespace="cto-eep-obs-prod-uk"
 
+# Maximum number of kubectl log requests running at same time
+MAX_PARALLEL_LOGS=4
+
+# Optional namespace argument
+# Example:
+# ./support-bundle.sh another-namespace
 if [ -n "${1:-}" ]; then
     namespace="$1"
 fi
 
-echo "--- Collecting Kubernetes Information for Namespace: ${namespace} ---"
+echo "============================================================"
+echo " Collecting Kubernetes Information"
+echo " Namespace: $namespace"
+echo " Max parallel log collections: $MAX_PARALLEL_LOGS"
+echo "============================================================"
+
+# ============================================================
+# CREATE OUTPUT DIRECTORY
+# ============================================================
 
 output_dir="./k8s-info-${namespace}-$(date +%Y%m%d-%H%M%S)"
+
 mkdir -p "$output_dir"
 cd "$output_dir" || exit 1
 
+echo "Output directory: $(pwd)"
+echo
 
-# ---------------------------------------------------------
-# 1. POD INFORMATION
-# ---------------------------------------------------------
+
+# ============================================================
+# POD INFORMATION
+# ============================================================
+
 collect_pods() {
-    echo "Capturing pod information..."
-    kubectl get pods -n "$namespace" -o wide > pods.txt 2>&1
+
+    echo "[PODS] Starting..."
+
+    kubectl get pods \
+        -n "$namespace" \
+        -o wide \
+        > pods.txt 2>&1
+
+    echo "[PODS] Finished"
 }
 
 
-# ---------------------------------------------------------
-# 2. DEPLOYMENTS
-# ---------------------------------------------------------
+# ============================================================
+# DEPLOYMENTS
+# ============================================================
+
 collect_deployments() {
-    echo "Capturing deployment information..."
-    kubectl get deployment -n "$namespace" -o yaml > deployment.yaml 2>&1
+
+    echo "[DEPLOYMENTS] Starting..."
+
+    kubectl get deployments \
+        -n "$namespace" \
+        -o yaml \
+        > deployment.yaml 2>&1
+
+    echo "[DEPLOYMENTS] Finished"
 }
 
 
-# ---------------------------------------------------------
-# 3. EVENTS
-# ---------------------------------------------------------
+# ============================================================
+# EVENTS
+# ============================================================
+
 collect_events() {
-    echo "Capturing events..."
+
+    echo "[EVENTS] Starting..."
+
     kubectl get events \
         -n "$namespace" \
         --sort-by=.metadata.creationTimestamp \
-        > event.txt 2>&1
+        > events.txt 2>&1
+
+    echo "[EVENTS] Finished"
 }
 
 
-# ---------------------------------------------------------
-# 4. POD LOGS
-# ---------------------------------------------------------
+# ============================================================
+# POD LOGS
+#
+# Maximum 4 kubectl logs commands run at the same time.
+# ============================================================
+
 collect_logs() {
-    echo "Capturing pod logs..."
 
-    for pod in $(kubectl get pods -n "$namespace" \
+    echo "[LOGS] Starting (maximum $MAX_PARALLEL_LOGS parallel)..."
+
+    pods=$(kubectl get pods \
+        -n "$namespace" \
         --no-headers \
-        -o custom-columns=":metadata.name"); do
+        -o custom-columns=":metadata.name")
 
-        echo "Collecting logs for pod: $pod"
+    running=0
+
+    for pod in $pods; do
+
+        echo "[LOGS] Starting collection for: $pod"
 
         kubectl logs "$pod" \
             -n "$namespace" \
             --all-containers=true \
             > "${pod}.log" 2>&1 &
+
+        running=$((running + 1))
+
+        # Once 4 are running, wait for this batch to finish
+        if [ "$running" -ge "$MAX_PARALLEL_LOGS" ]; then
+
+            echo "[LOGS] Waiting for current batch of $MAX_PARALLEL_LOGS..."
+
+            wait
+
+            running=0
+        fi
+
     done
 
-    # Wait for all pod log commands
+    # Wait for remaining 1-3 pods
     wait
+
+    echo "[LOGS] Finished"
 }
 
 
-# ---------------------------------------------------------
-# 5. STATEFULSETS
-# ---------------------------------------------------------
-collect_statefulsets() {
-    echo "Capturing StatefulSet configurations..."
+# ============================================================
+# STATEFULSETS
+# ============================================================
 
-    for sts in $(kubectl get sts -n "$namespace" \
+collect_statefulsets() {
+
+    echo "[STATEFULSETS] Starting..."
+
+    statefulsets=$(kubectl get sts \
+        -n "$namespace" \
         --no-headers \
-        -o custom-columns=":metadata.name"); do
+        -o custom-columns=":metadata.name")
+
+    for sts in $statefulsets; do
+
+        echo "[STATEFULSETS] Collecting: $sts"
 
         kubectl get sts "$sts" \
             -n "$namespace" \
             -o yaml \
             > "${sts}-statefulset.yaml" 2>&1
+
     done
+
+    echo "[STATEFULSETS] Finished"
 }
 
 
-# ---------------------------------------------------------
-# 6. CONFLUENT CUSTOM RESOURCES
-# ---------------------------------------------------------
+# ============================================================
+# CONFLUENT PLATFORM CUSTOM RESOURCES
+# ============================================================
+
 collect_confluent_crs() {
-    echo "Capturing custom resource configurations (platform.confluent.io)..."
 
-    kubectl get all -n "$namespace" 2>/dev/null |
-    grep "platform.confluent.io" |
-    awk '{print $1}' |
-    while read -r cr; do
+    echo "[CFK CRs] Starting..."
 
-        kind=$(echo "$cr" | cut -d/ -f1)
-        name=$(echo "$cr" | cut -d/ -f2)
+    for cr in $(kubectl api-resources \
+        --verbs=list \
+        --namespaced=true \
+        -o name 2>/dev/null | grep "platform.confluent.io"); do
 
-        echo "Collecting config for Custom resource: $kind/$name"
+        echo "[CFK CRs] Checking resource type: $cr"
 
-        kubectl get "$kind" "$name" \
+        names=$(kubectl get "$cr" \
             -n "$namespace" \
-            -o yaml \
-            > "${name}.yaml" 2>&1
+            --no-headers \
+            -o custom-columns=":metadata.name" \
+            2>/dev/null)
+
+        for name in $names; do
+
+            safe_cr=$(echo "$cr" | tr '/' '_')
+
+            echo "[CFK CRs] Collecting: $cr/$name"
+
+            kubectl get "$cr" "$name" \
+                -n "$namespace" \
+                -o yaml \
+                > "${safe_cr}-${name}.yaml" 2>&1
+
+        done
+
     done
+
+    echo "[CFK CRs] Finished"
 }
 
 
-# ---------------------------------------------------------
-# 7. SHARED CONFIGMAPS
-# ---------------------------------------------------------
-collect_configmaps() {
-    echo "Capturing shared configmaps..."
+# ============================================================
+# SHARED CONFIGMAPS
+# ============================================================
 
-    for configmap in $(kubectl get configmaps \
+collect_configmaps() {
+
+    echo "[CONFIGMAPS] Starting..."
+
+    configmaps=$(kubectl get configmaps \
         -n "$namespace" \
         --no-headers \
-        -o custom-columns=":metadata.name" |
-        grep "shared-config"); do
+        -o custom-columns=":metadata.name" \
+        2>/dev/null | grep "shared-config" || true)
 
-        echo "Collecting config for ConfigMap: $configmap"
+    for configmap in $configmaps; do
 
-        kubectl get cm "$configmap" \
+        echo "[CONFIGMAPS] Collecting: $configmap"
+
+        kubectl get configmap "$configmap" \
             -n "$namespace" \
             -o yaml \
             > "${configmap}-configmap.yaml" 2>&1
+
     done
+
+    echo "[CONFIGMAPS] Finished"
 }
 
 
-# =========================================================
-# START EVERYTHING IN PARALLEL
-# =========================================================
+# ============================================================
+# START ALL MAIN COLLECTORS IN PARALLEL
+# ============================================================
+
+echo
+echo "============================================================"
+echo " Starting collectors in parallel"
+echo "============================================================"
+echo
 
 collect_pods &
-pid_pods=$!
+PID_PODS=$!
 
 collect_deployments &
-pid_deployments=$!
+PID_DEPLOYMENTS=$!
 
 collect_events &
-pid_events=$!
+PID_EVENTS=$!
 
 collect_logs &
-pid_logs=$!
+PID_LOGS=$!
 
 collect_statefulsets &
-pid_sts=$!
+PID_STATEFULSETS=$!
 
 collect_confluent_crs &
-pid_crs=$!
+PID_CFK=$!
 
 collect_configmaps &
-pid_cm=$!
+PID_CONFIGMAPS=$!
 
 
-echo ""
-echo "Collectors started in background..."
-echo "PIDs: $pid_pods $pid_deployments $pid_events $pid_logs $pid_sts $pid_crs $pid_cm"
-echo ""
+echo
+echo "Background collector PIDs:"
+echo "  Pods         : $PID_PODS"
+echo "  Deployments  : $PID_DEPLOYMENTS"
+echo "  Events       : $PID_EVENTS"
+echo "  Logs         : $PID_LOGS"
+echo "  StatefulSets : $PID_STATEFULSETS"
+echo "  CFK CRs      : $PID_CFK"
+echo "  ConfigMaps   : $PID_CONFIGMAPS"
+echo
 
 
-# Wait for ALL collectors
-wait "$pid_pods"
-wait "$pid_deployments"
-wait "$pid_events"
-wait "$pid_logs"
-wait "$pid_sts"
-wait "$pid_crs"
-wait "$pid_cm"
+# ============================================================
+# WAIT FOR ALL MAIN COLLECTORS
+# ============================================================
+
+failed=0
+
+wait "$PID_PODS" || {
+    echo "[ERROR] Pods collection failed"
+    failed=1
+}
+
+wait "$PID_DEPLOYMENTS" || {
+    echo "[ERROR] Deployment collection failed"
+    failed=1
+}
+
+wait "$PID_EVENTS" || {
+    echo "[ERROR] Events collection failed"
+    failed=1
+}
+
+wait "$PID_LOGS" || {
+    echo "[ERROR] Pod logs collection failed"
+    failed=1
+}
+
+wait "$PID_STATEFULSETS" || {
+    echo "[ERROR] StatefulSet collection failed"
+    failed=1
+}
+
+wait "$PID_CFK" || {
+    echo "[ERROR] CFK CR collection failed"
+    failed=1
+}
+
+wait "$PID_CONFIGMAPS" || {
+    echo "[ERROR] ConfigMap collection failed"
+    failed=1
+}
 
 
-echo ""
-echo "--- Kubernetes Information collection complete. Files saved in: $(pwd) ---"
+# ============================================================
+# COMPLETE
+# ============================================================
+
+echo
+echo "============================================================"
+
+if [ "$failed" -eq 0 ]; then
+    echo " Collection completed successfully."
+else
+    echo " Collection completed with one or more errors."
+fi
+
+echo
+echo " Files saved in:"
+echo " $(pwd)"
+echo
+echo " Maximum parallel pod log requests: $MAX_PARALLEL_LOGS"
+
+echo "============================================================"
