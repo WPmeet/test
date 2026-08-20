@@ -1,0 +1,22 @@
+Issue: Kafka log segments are not being deleted after the configured retention period
+
+We are investigating an issue where Kafka log segments remain present on broker storage significantly beyond their expected retention period.
+
+The affected topics have a configured retention of approximately 12 hours, but we can see segment files on disk that are considerably older than this and have not been deleted.
+
+We want to establish whether the issue is with segment rolling, retention eligibility, log cleanup, or another broker-side condition preventing deletion.
+
+In particular, we would like to understand:
+
+whether the older segments have actually been closed/rolled and are eligible for deletion;
+why segments older than the configured retention period remain on disk;
+whether Kafka's log retention/cleanup thread is identifying these segments for deletion;
+whether segment.ms, segment.bytes, retention.ms, retention.bytes, file.delete.delay.ms, or log.retention.check.interval.ms are contributing to the behaviour;
+whether replica state, partition movement/rebalancing, storage conditions, or broker activity could be preventing cleanup;
+whether there are broker logs/metrics that indicate segments being selected for deletion, skipped, or failing to delete.
+
+The issue appears to be persistent rather than a short delay in the retention scan: we are observing segments remaining approximately 12 hours beyond the point at which we expected them to have expired.
+
+We are collecting a support bundle containing broker logs, events, StatefulSets, deployments, ConfigMaps, KafkaTopic CRs, ConfluentRoleBindings and other CFK resources so that the effective topic and broker configuration can be correlated with the files remaining on disk.
+
+Primary question: What is preventing these old log segments from becoming eligible for deletion or being physically removed, despite the configured retention period having elapsed?
