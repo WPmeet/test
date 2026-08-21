@@ -20,3 +20,20 @@ The issue appears to be persistent rather than a short delay in the retention sc
 We are collecting a support bundle containing broker logs, events, StatefulSets, deployments, ConfigMaps, KafkaTopic CRs, ConfluentRoleBindings and other CFK resources so that the effective topic and broker configuration can be correlated with the files remaining on disk.
 
 Primary question: What is preventing these old log segments from becoming eligible for deletion or being physically removed, despite the configured retention period having elapsed?
+deriv(
+  kafka_log_log_size{
+    topic="edo.otel.dbpostgres.metrics.raw.public",
+    partition="9",
+    instance=~".*broker(0|1|6).*"
+  }[5m]
+)
+-
+ignoring(instance, hostname)
+group_left
+deriv(
+  kafka_log_log_size{
+    topic="edo.otel.dbpostgres.metrics.raw.public",
+    partition="9",
+    instance=~".*broker2.*"
+  }[5m]
+)
