@@ -45,3 +45,22 @@ deriv(
     instance=~".*broker(0|1|2|6).*"
   }[5m]
 )
+(
+  deriv(
+    kafka_log_log_size{
+      topic="edo.otel.dbpostgres.metrics.raw.public",
+      partition="9",
+      instance=~".*broker(0|1|6).*"
+    }[5m]
+  )
+-
+  on(topic, partition)
+  group_left
+  deriv(
+    kafka_log_log_size{
+      topic="edo.otel.dbpostgres.metrics.raw.public",
+      partition="9",
+      instance=~".*broker2.*"
+    }[5m]
+  )
+) / 1024 / 1024
