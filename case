@@ -55,3 +55,10 @@ deriv(
     instance=~".*broker2.*"
   }[5m]
 )
+deriv(
+  kafka_log_log_logendoffset{
+    topic="edo.otel.dbpostgres.metrics.raw.public",
+    partition="9",
+    instance=~".*broker(0|1|2|6).*"
+  }[5m]
+)
