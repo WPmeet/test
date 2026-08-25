@@ -8,6 +8,15 @@ sourcetype="kube:container:cto-cfk-sydc-kafka"
 
 curl -k \
   -u 'YOUR_USERNAME' \
+  'https://glog-hbse-searchsystems.uk.hsbc:8089/services/search/jobs/export' \
+  --data-urlencode 'search=search index=hsbc_cto_kafka_zookeeper namespace IN ("cto-eep-obs-prod-uk") "edo.otel.dbpostgres.metrics.raw.public-9" sourcetype="kube:container:cto-cfk-sydc-kafka"' \
+  --data-urlencode 'earliest_time=2026-07-26T00:00:00' \
+  --data-urlencode 'latest_time=2026-08-16T00:00:00' \
+  --data-urlencode 'output_mode=raw' \
+  -o kafka_broker_logs.log
+
+curl -k \
+  -u 'YOUR_USERNAME' \
   'https://glog-htse-searchsystems.uk.hsbc:8089/services/search/jobs/export' \
   --data-urlencode 'search=search index=hsbc_cto_kafka_zookeeper namespace IN ("cto-eep-obs-prod-uk") "edo.otel.dbpostgres.metrics.raw.public-9" sourcetype="kube:container:cto-cfk-sydc-kafka" | sort 0 _time | pupu' \
   --data-urlencode 'earliest_time=2026-07-26T00:00:00' \
