@@ -1,4 +1,25 @@
 
+
+
+max by (topic, partition) (
+  kafka_log_log_end_offset
+)
+-
+on (topic, partition)
+group_right(instance)
+kafka_log_log_end_offset
+> 100
+
+max by (topic, partition) (
+  kafka_log_log_end_offset{leader="true"}
+)
+-
+on (topic, partition)
+group_right(instance)
+kafka_log_log_end_offset{leader="false"}
+> 100
+
+
 PID=$(pgrep -f 'kafka.Kafka')
 ls -l /proc/$PID/fd 2>/dev/null | grep "$(pwd)" | grep '\.log'
 ls -1 *.log | sort > /tmp/all.log
