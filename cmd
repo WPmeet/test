@@ -1,3 +1,13 @@
+index=hsbc_cto_kafka_zookeeper
+namespace="cto-eep-obs-prod-uk"
+sourcetype="kube:container:cto-cfk-sydc-kafka"
+host="YOUR_BROKER_HOST"
+| eval marker_time=if(searchmatch("Started socket server acceptors and processors"), _time, null())
+| eventstats min(marker_time) as first_marker_time
+| where _time >= first_marker_time
+| sort 0 _time
+
+
 
 index=hsbc_cto_kafka_zookeeper
 namespace IN ("cto-eep-obs-prod-uk")
