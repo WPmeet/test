@@ -7,7 +7,14 @@ host="YOUR_BROKER_HOST"
 | where _time >= first_marker_time
 | sort 0 _time
 
-
+curl -k \
+  -u 'YOUR_USER_ID' \
+  'https://glog-htse-rest.systems.uk.hsbc:8089/services/search/jobs/export' \
+  --data-urlencode 'search=search index=hsbc_cto_kafka_zookeeper namespace IN ("cto-eep-obs-prod-uk") "edo.otel.dbpostgres.metrics.raw.public-9" sourcetype="kube:container:cto-cfk-sydc-kafka"' \
+  --data-urlencode 'earliest_time=2026-07-26T00:00:00' \
+  --data-urlencode 'latest_time=2026-08-22T00:00:00' \
+  --data-urlencode 'output_mode=raw' \
+  -o kafka_logs_26Jul_22Aug.log
 
 index=hsbc_cto_kafka_zookeeper
 namespace IN ("cto-eep-obs-prod-uk")
