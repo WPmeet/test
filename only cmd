@@ -1,1 +1,74 @@
-http://cto-eep-obs-prod-uk-azb4001-broker5.uk.hsbc:7777/jolokia/read/kafka.server:type=ReplicaManager,name=ObserverInIsrCount/Value
+{{- define "cfk.connector.source.connection" -}}
+{{- $root := .root -}}
+{{- $connectorProvision := .connectorConfigs | default dict -}}
+{{- $connectorProvisionConfigs := get $connectorProvision "configs" | default dict -}}
+{{- $connectorClass := $root.Values.cfk.connectorClass | default "" -}}
+
+{{- $connectionConfigs := dict -}}
+
+{{/*
+Load anything explicitly defined under source.connection.
+Useful for MQ, Mongo SSL settings, and any future connector.
+*/}}
+{{- if and
+      (hasKey $root.Values.cfk.connector "source")
+      (hasKey $root.Values.cfk.connector.source "connection")
+-}}
+  {{- $connectionConfigs = deepCopy
+      ($root.Values.cfk.connector.source.connection | default dict)
+  -}}
+{{- end -}}
+
+
+{{/*
+MongoDB
+*/}}
+{{- if hasSuffix "MongoSourceConnector" $connectorClass -}}
+
+  {{- $database := required
+      "provision.configs.database is required for MongoSourceConnector"
+      (get $connectorProvisionConfigs "database")
+  -}}
+
+  {{- $_ := set
+      $connectionConfigs
+      "connection.uri"
+      (printf
+        "${file:/vault/secrets/connector/mongodb/mongodb-connection-uri:%s}"
+        $database)
+  -}}
+
+
+{{/*
+IBM MQ
+*/}}
+{{- else if hasSuffix "MQSourceConnector" $connectorClass -}}
+
+  {{/*
+  MQ currently needs no generated values.
+  Its mq.* connection properties come directly from source.connection.
+  Keep this branch here so future MQ-specific logic has a clear home.
+  */}}
+
+
+{{/*
+Pub/Sub
+*/}}
+{{- else if contains "pubsub" (lower $connectorClass) -}}
+
+  {{/*
+  Pub/Sub-specific generated connection properties can go here later.
+  For now, nothing needs to be injected.
+  */}}
+
+{{- end -}}
+
+
+{{/*
+Only render when there is actually a connection configuration.
+*/}}
+{{- if $connectionConfigs }}
+{{- toYaml $connectionConfigs | nindent 4 -}}
+{{- end -}}
+
+{{- end -}}
