@@ -2,73 +2,44 @@
 {{- $root := .root -}}
 {{- $connectorProvision := .connectorConfigs | default dict -}}
 {{- $connectorProvisionConfigs := get $connectorProvision "configs" | default dict -}}
-{{- $connectorClass := $root.Values.cfk.connectorClass | default "" -}}
 
-{{- $connectionConfigs := dict -}}
-
-{{/*
-Load anything explicitly defined under source.connection.
-Useful for MQ, Mongo SSL settings, and any future connector.
-*/}}
 {{- if and
-      (hasKey $root.Values.cfk.connector "source")
-      (hasKey $root.Values.cfk.connector.source "connection")
+    (hasKey $root.Values.cfk.connector "source")
+    (hasKey $root.Values.cfk.connector.source "connection")
 -}}
-  {{- $connectionConfigs = deepCopy
+
+  {{- $connectionConfigs := deepCopy
       ($root.Values.cfk.connector.source.connection | default dict)
   -}}
-{{- end -}}
 
+  {{- $connectorClass := $root.Values.cfk.connectorClass | default "" -}}
 
-{{/*
-MongoDB
-*/}}
-{{- if hasSuffix "MongoSourceConnector" $connectorClass -}}
+  {{/*
+  MongoDB only:
+  Override/add connection.uri using provision.configs.database.
+  Everything else already present under source.connection is preserved.
+  */}}
+  {{- if hasSuffix "MongoSourceConnector" $connectorClass -}}
 
-  {{- $database := required
-      "provision.configs.database is required for MongoSourceConnector"
-      (get $connectorProvisionConfigs "database")
-  -}}
+    {{- $database := required
+        "provision.configs.database is required for MongoSourceConnector"
+        (get $connectorProvisionConfigs "database")
+    -}}
 
-  {{- $_ := set
-      $connectionConfigs
-      "connection.uri"
-      (printf
+    {{- $connectionUri := printf
         "${file:/vault/secrets/connector/mongodb/mongodb-connection-uri:%s}"
-        $database)
-  -}}
+        $database
+    -}}
 
+    {{- $_ := set
+        $connectionConfigs
+        "connection.uri"
+        $connectionUri
+    -}}
 
-{{/*
-IBM MQ
-*/}}
-{{- else if hasSuffix "MQSourceConnector" $connectorClass -}}
+  {{- end -}}
 
-  {{/*
-  MQ currently needs no generated values.
-  Its mq.* connection properties come directly from source.connection.
-  Keep this branch here so future MQ-specific logic has a clear home.
-  */}}
-
-
-{{/*
-Pub/Sub
-*/}}
-{{- else if contains "pubsub" (lower $connectorClass) -}}
-
-  {{/*
-  Pub/Sub-specific generated connection properties can go here later.
-  For now, nothing needs to be injected.
-  */}}
+  {{- toYaml $connectionConfigs | nindent 4 -}}
 
 {{- end -}}
-
-
-{{/*
-Only render when there is actually a connection configuration.
-*/}}
-{{- if $connectionConfigs }}
-{{- toYaml $connectionConfigs | nindent 4 -}}
-{{- end -}}
-
 {{- end -}}
