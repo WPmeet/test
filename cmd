@@ -1,3 +1,18 @@
+
+kafka_log_log_end_offset{
+  topic="edo.otel.dbpostres.metrics.raw.public",
+  partition=~"1|4|6|8|10"
+}
+==
+on (partition)
+group_right
+max by (partition) (
+  kafka_log_log_end_offset{
+    topic="edo.otel.dbpostres.metrics.raw.public",
+    partition=~"1|4|6|8|10"
+  }
+)
+
 index=hsbc_cto_kafka_zookeeper
 namespace="cto-eep-obs-prod-uk"
 sourcetype="kube:container:cto-cfk-sydc-kafka"
