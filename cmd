@@ -1,26 +1,24 @@
 
-kafka_log_log_end_offset{
-  topic="edo.otel.dbpostres.metrics.raw.public",
-  partition=~"1|4|6|8|10"
-}
-==
-on (partition)
-group_right
-max by (partition) (
-  kafka_log_log_end_offset{
-    topic="edo.otel.dbpostres.metrics.raw.public",
-    partition=~"1|4|6|8|10"
-  }
+index="hsbc_cto_kafka_zookeeper"
+namespace="cto-eep-obs-prod-hk"
+(
+    "edo.otel.dbpostgres.metrics.raw.public"
+    OR "edo.otel.oslinux.metrics.raw.public"
 )
+(
+    "Unexpected OffsetOutOfRangeException"
+    OR "OffsetOutOfRangeException"
+    OR "NotLeaderOrFollowerException"
+    OR "NotLeaderOrFollower"
+    OR "Shrinking ISR"
+    OR "Expanding ISR"
+    OR "ReplicaFetcher"
+)
+| eval broker=coalesce(host, kubernetes.pod_name, pod_name)
+| rex field=_raw "partition=(?<topic_partition>[^,\]\s]+)"
+| stats count values(topic_partition) as affected_partitions values(kubernetes.pod_name) as pods by broker
+| sort - count
 
-index=hsbc_cto_kafka_zookeeper
-namespace="cto-eep-obs-prod-uk"
-sourcetype="kube:container:cto-cfk-sydc-kafka"
-host="YOUR_BROKER_HOST"
-| eval marker_time=if(searchmatch("Started socket server acceptors and processors"), _time, null())
-| eventstats min(marker_time) as first_marker_time
-| where _time >= first_marker_time
-| sort 0 _time
 
 curl -k \
   -u 'YOUR_USER_ID' \
