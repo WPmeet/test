@@ -1,4 +1,15 @@
-
+100 *
+count by (instance) (
+  kafka_log_log_size{leader="true"}
+)
+/
+scalar(
+  avg(
+    count by (instance) (
+      kafka_log_log_size{leader="true"}
+    )
+  )
+)
 index="hsbc_cto_kafka_zookeeper"
 namespace="cto-eep-obs-prod-hk"
 (
