@@ -1,3 +1,9 @@
+
+echo "STOP START $(date '+%H:%M:%S.%3N')"
+kafka-server-stop.sh
+echo "STOP COMMAND RETURNED $(date '+%H:%M:%S.%3N')"
+
+
 Issue: Kafka log segments are not being deleted after the configured retention period
 
 We are investigating an issue where Kafka log segments remain present on broker storage significantly beyond their expected retention period.
