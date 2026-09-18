@@ -1,3 +1,6 @@
+cat >/tmp/cancel.json <<'EOF'
+{"version":1,"partitions":[{"topic":"edo.otel.oslinux.metrics.raw.public","partition":9,"replicas":[]}]}
+EOF
 
 echo "STOP START $(date '+%H:%M:%S.%3N')"
 kafka-server-stop.sh
