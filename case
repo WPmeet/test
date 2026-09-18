@@ -1,6 +1,20 @@
 cat >/tmp/cancel.json <<'EOF'
 {"version":1,"partitions":[{"topic":"edo.otel.oslinux.metrics.raw.public","partition":9,"replicas":[]}]}
+
 EOF
+cat > rollback-reassignment.json <<'EOF'
+{
+  "version": 1,
+  "partitions": [
+    {
+      "topic": "orders",
+      "partition": 3,
+      "replicas": [1, 2, 3]
+    }
+  ]
+}
+EOF
+
 
 echo "STOP START $(date '+%H:%M:%S.%3N')"
 kafka-server-stop.sh
