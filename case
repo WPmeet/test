@@ -1,8 +1,7 @@
 kafka_log_logendoffset{
   job="kafka-broker",
   namespace="cto-eep-obs-prod-uk",
-  topic=~"edo\\.otel\\.(oslinux\\.metrics\\.raw|dbpostgres\\.metrics\\.raw|oswin\\.metrics\\.raw)\\.public",
-  partition=~"12|15|22|23"
+  topic=~"edo\\.otel\\.(oslinux\\.metrics\\.raw|dbpostgres\\.metrics\\.raw|oswin\\.metrics\\.raw)\\.public"
 }
 ==
 on (topic, partition) group_left()
@@ -10,8 +9,7 @@ max by (topic, partition) (
   kafka_log_logendoffset{
     job="kafka-broker",
     namespace="cto-eep-obs-prod-uk",
-    topic=~"edo\\.otel\\.(oslinux\\.metrics\\.raw|dbpostgres\\.metrics\\.raw|oswin\\.metrics\\.raw)\\.public",
-    partition=~"12|15|22|23"
+    topic=~"edo\\.otel\\.(oslinux\\.metrics\\.raw|dbpostgres\\.metrics\\.raw|oswin\\.metrics\\.raw)\\.public"
   }
 )
 
