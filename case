@@ -2,3 +2,6 @@ kubectl annotate kafka <kafka-name> -n <namespace> \
   platform.confluent.io/roll-pause=true \
   platform.confluent.io/block-reconcile=true \
   --overwrite
+
+
+kubectl patch sts <statefulset-name> -n <namespace>   -p '{"spec":{"updateStrategy":{"type":"OnDelete"}}}'
