@@ -21,15 +21,75 @@ spec:
     name: cto-esp-connect
 
   configs:
-    topics: enterprise.party.events
+apiVersion: platform.confluent.io/v1beta1
+kind: KafkaConnector
+metadata:
+  name: party-pubsub-sink
+  namespace: cto-esp-nonprod-uk
 
+spec:
+  name: party-pubsub-sink
+
+  class: com.google.pubsub.kafka.sink.CloudPubSubSinkConnector
+
+  taskMax: 3
+
+  connectClusterRef:
+    name: cto-esp-connect
+
+  configs:
+
+    # =========================================================
+    # Kafka source
+    # =========================================================
+    topics: enterprise.party.events
+    tasks.max: "3"
+
+    # =========================================================
+    # Kafka KEY
+    # =========================================================
+    key.converter: org.apache.kafka.connect.json.JsonConverter
+    key.converter.schemas.enable: "false"
+
+    # =========================================================
+    # Kafka VALUE
+    # =========================================================
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter.schemas.enable: "false"
+
+    # =========================================================
+    # Google Pub/Sub
+    # =========================================================
     cps.project: my-gcp-project
     cps.topic: enterprise-party-events
 
-    key.converter: org.apache.kafka.connect.storage.StringConverter
-    value.converter: org.apache.kafka.connect.converters.ByteArrayConverter
+    cps.endpoint: pubsub.googleapis.com:443
 
-    # Optional tuning
+    # =========================================================
+    # GCP authentication
+    # =========================================================
+    gcp.sa.credentials.file.path: /vault/secrets/connector/pubsub/pubsub-api-creds.json
+
+    # =========================================================
+    # Pub/Sub message behaviour
+    # =========================================================
+    metadata.publish: "true"
+    headers.publish: "true"
+
+    # Use Kafka record key as Pub/Sub ordering key
+    orderingKeySource: key
+
+    # =========================================================
+    # Publishing / batching
+    # =========================================================
     maxBufferSize: "100"
     maxBufferBytes: "9500000"
+
+    maxOutstandingMessages: "1000"
     maxOutstandingRequestBytes: "104857600"
+
+    maxDelayThresholdMs: "100"
+
+    maxRequestTimeoutMs: "10000"
+    maxTotalTimeoutMs: "60000"
+    maxShutdownTimeoutMs: "60000"
