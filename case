@@ -5,3 +5,31 @@ kubectl annotate kafka <kafka-name> -n <namespace> \
 
 
 kubectl patch sts <statefulset-name> -n <namespace>   -p '{"spec":{"updateStrategy":{"type":"OnDelete"}}}'
+apiVersion: platform.confluent.io/v1beta1
+kind: KafkaConnector
+metadata:
+  name: party-pubsub-sink
+  namespace: cto-esp-nonprod-uk
+spec:
+  name: party-pubsub-sink
+
+  class: com.google.pubsub.kafka.sink.CloudPubSubSinkConnector
+
+  taskMax: 3
+
+  connectClusterRef:
+    name: cto-esp-connect
+
+  configs:
+    topics: enterprise.party.events
+
+    cps.project: my-gcp-project
+    cps.topic: enterprise-party-events
+
+    key.converter: org.apache.kafka.connect.storage.StringConverter
+    value.converter: org.apache.kafka.connect.converters.ByteArrayConverter
+
+    # Optional tuning
+    maxBufferSize: "100"
+    maxBufferBytes: "9500000"
+    maxOutstandingRequestBytes: "104857600"
