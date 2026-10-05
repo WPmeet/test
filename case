@@ -2,7 +2,7 @@ kubectl annotate kafka <kafka-name> -n <namespace> \
   platform.confluent.io/roll-pause=true \
   platform.confluent.io/block-reconcile=true \
   --overwrite
-
+wget https://repo1.maven.org/maven2/com/google/cloud/pubsub-group-kafka-connector/1.3.3/pubsub-group-kafka-connector-1.3.3.jar 
 jar tf /mnt/plugins/pubsub-pubsub-kafka-connect-google/pubsub-group-kafka-connector-1.3.3.jar \
 | grep '^io/grpc/' | head -30
 jar tf /mnt/plugins/pubsub-pubsub-kafka-connect-google/pubsub-group-kafka-connector-1.3.3.jar \
