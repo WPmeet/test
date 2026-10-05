@@ -2,6 +2,7 @@ kubectl annotate kafka <kafka-name> -n <namespace> \
   platform.confluent.io/roll-pause=true \
   platform.confluent.io/block-reconcile=true \
   --overwrite
+cmd /c "set JAVA_HOME=C:\Program Files\Azul\zulu-jdk21.44.18&& set MAVEN_OPTS=-Djavax.net.ssl.trustStore=C:\temp\maven-truststore.jks -Djavax.net.ssl.trustStorePassword=changeit&& mvn -gs C:\temp\empty-settings.xml -s C:\temp\empty-settings.xml org.apache.maven.plugins:maven-dependency-plugin:3.6.1:get -Dartifact=com.google.cloud:pubsub-group-kafka-connector:1.3.0:jar"
 $env:JAVA_HOME="C:\Program Files\Azul\zulu-jdk21.44.18"; $env:Path="$env:JAVA_HOME\bin;$env:Path"; mvn -version
 wget https://repo1.maven.org/maven2/com/google/cloud/pubsub-group-kafka-connector/1.3.3/pubsub-group-kafka-connector-1.3.3.jar 
 jar tf /mnt/plugins/pubsub-pubsub-kafka-connect-google/pubsub-group-kafka-connector-1.3.3.jar \
