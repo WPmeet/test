@@ -1,53 +1,68 @@
 {{- define "cfk.connector.source.connection" -}}
 {{- $root := .root -}}
-{{- $connectorConfigs := .connectorConfigs -}}
+{{- $connectorProvision := .connectorConfigs | default dict -}}
+{{- $connectorProvisionConfigs := get $connectorProvision "configs" | default dict -}}
 
-{{- $connectionConfigs := deepCopy
-    ($root.Values.cfk.connector.source.connection | default dict)
+{{- if and
+    (hasKey $root.Values.cfk.connector "source")
+    (hasKey $root.Values.cfk.connector.source "connection")
 -}}
 
-{{- if hasSuffix "MongoSourceConnector" $connectorConfigs.class }}
+    {{- $connectionConfigs := deepCopy
+        ($root.Values.cfk.connector.source.connection | default dict) -}}
 
-  {{- $database := get ($connectorConfigs.configs | default dict) "database" -}}
+    {{- $connectorClass := $root.Values.cfk.connectorClass | default "" -}}
 
-  {{- if not $database -}}
-    {{- fail "MongoDB Source connector requires database in connectorConfigs.configs" -}}
-  {{- end -}}
+    {{/*
+    MongoDB:
+    Override the default connection.uri using the database from the
+    current connector's provision.configs.
+    */}}
+    {{- if hasSuffix "MongoSourceConnector" $connectorClass -}}
 
-  {{- $_ := set $connectionConfigs "connection.uri"
-      (printf "${file:/vault/secrets/connector/mongodb/%s-mongodb-connection-uri-b64:mongodb-connection-uri}" $database)
-  -}}
+        {{- $database := required
+            "provision.configs.database is required for MongoSourceConnector"
+            (get $connectorProvisionConfigs "database")
+        -}}
 
-{{- end }}
+        {{- $connectionUri := printf
+            "${file:/vault/secrets/connector/mongodb/mongodb-connection-uri:%s}"
+            $database
+        -}}
 
-{{- toYaml $connectionConfigs | nindent 4 }}
-{{- end }}
+        {{- $_ := set $connectionConfigs "connection.uri" $connectionUri -}}
+
+    {{- end -}}
+
+    {{- toYaml $connectionConfigs | nindent 4 -}}
+
+{{- end -}}
+{{- end -}}
 
 
+{{/*
+Shared connection configuration
+*/}}
 {{- define "cfk.connector.shared.connection" -}}
 {{- $root := .root -}}
-{{- $connectorClass := .connectorClass -}}
+{{- $connectorClass := .connectorClass | default "" -}}
 
-{{- if hasSuffix "MongoSourceConnector" $connectorClass }}
+{{- if hasSuffix "CloudPubSubSinkConnector" $connectorClass -}}
 
-  {{/* Keep existing MongoDB shared connection logic here */}}
+    {{- $connectionConfig := deepCopy
+        ($root.Values.cfk.connector.sink.connection.configs | default dict)
+    -}}
 
-{{- else if hasSuffix "CloudPubSubSinkConnector" $connectorClass }}
+    {{- $commonConfig := deepCopy
+        ($root.Values.cfk.connector.shared.connection.configs | default dict)
+    -}}
 
-  {{- $connectionConfig := deepCopy
-      ($root.Values.cfk.connector.sink.connection.configs | default dict)
-  -}}
+    {{- $_ := mergeOverwrite $connectionConfig $commonConfig -}}
 
-  {{- $commonConfig := deepCopy
-      ($root.Values.cfk.connector.shared.connection.configs | default dict)
-  -}}
+    {{- toYaml $connectionConfig | nindent 4 -}}
 
-  {{- $mergedConfig := mergeOverwrite $connectionConfig $commonConfig -}}
-
-  {{- toYaml $mergedConfig | nindent 4 }}
-
-{{- end }}
-{{- end }}
+{{- end -}}
+{{- end -}}
 
 cfk:
   connector:
