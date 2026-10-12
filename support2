@@ -1,12 +1,3 @@
-{{- else if hasSuffix "CloudPubSubSinkConnector" $connectorClass }}
-
-  {{- $connectionConfig := deepCopy
-      ($root.Values.cfk.connector.sink.connection.configs | default dict)
-  -}}
-
-  {{- toYaml $connectionConfig | nindent 4 }}
-
-{{- end }} 
 {{- define "cfk.connector.source.connection" -}}
 {{- $root := .root -}}
 {{- $connectorConfigs := .connectorConfigs -}}
