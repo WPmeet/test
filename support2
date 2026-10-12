@@ -1,68 +1,4 @@
-{{- define "cfk.connector.source.connection" -}}
-{{- $root := .root -}}
-{{- $connectorProvision := .connectorConfigs | default dict -}}
-{{- $connectorProvisionConfigs := get $connectorProvision "configs" | default dict -}}
 
-{{- if and
-    (hasKey $root.Values.cfk.connector "source")
-    (hasKey $root.Values.cfk.connector.source "connection")
--}}
-
-    {{- $connectionConfigs := deepCopy
-        ($root.Values.cfk.connector.source.connection | default dict) -}}
-
-    {{- $connectorClass := $root.Values.cfk.connectorClass | default "" -}}
-
-    {{/*
-    MongoDB:
-    Override the default connection.uri using the database from the
-    current connector's provision.configs.
-    */}}
-    {{- if hasSuffix "MongoSourceConnector" $connectorClass -}}
-
-        {{- $database := required
-            "provision.configs.database is required for MongoSourceConnector"
-            (get $connectorProvisionConfigs "database")
-        -}}
-
-        {{- $connectionUri := printf
-            "${file:/vault/secrets/connector/mongodb/mongodb-connection-uri:%s}"
-            $database
-        -}}
-
-        {{- $_ := set $connectionConfigs "connection.uri" $connectionUri -}}
-
-    {{- end -}}
-
-    {{- toYaml $connectionConfigs | nindent 4 -}}
-
-{{- end -}}
-{{- end -}}
-
-
-{{/*
-Shared connection configuration
-*/}}
-{{- define "cfk.connector.shared.connection" -}}
-{{- $root := .root -}}
-{{- $connectorClass := .connectorClass | default "" -}}
-
-{{- if hasSuffix "CloudPubSubSinkConnector" $connectorClass -}}
-
-    {{- $connectionConfig := deepCopy
-        ($root.Values.cfk.connector.sink.connection.configs | default dict)
-    -}}
-
-    {{- $commonConfig := deepCopy
-        ($root.Values.cfk.connector.shared.connection.configs | default dict)
-    -}}
-
-    {{- $_ := mergeOverwrite $connectionConfig $commonConfig -}}
-
-    {{- toYaml $connectionConfig | nindent 4 -}}
-
-{{- end -}}
-{{- end -}}
 
 cfk:
   connector:
@@ -103,3 +39,65 @@ cfk:
           consumer.override.ssl.truststore.password: '${file:/vault/secrets/connector/jksPassword.txt:jksPassword}'
 
           consumer.override.max.poll.interval.ms: "300000"
+{{- define "cfk.connector.source.connection" -}}
+{{- $root := .root -}}
+{{- $connectorProvision := .connectorConfigs | default dict -}}
+{{- $connectorProvisionConfigs := get $connectorProvision "configs" | default dict -}}
+
+{{- if and
+    (hasKey $root.Values.cfk.connector "source")
+    (hasKey $root.Values.cfk.connector.source "connection")
+-}}
+
+    {{- $connectionConfigs := deepCopy
+        ($root.Values.cfk.connector.source.connection | default dict) -}}
+
+    {{- $connectorClass := $root.Values.cfk.connectorClass | default "" -}}
+
+    {{/*
+    MongoDB:
+    Override the default connection.uri using the database from the
+    current connector's provision.configs.
+    */}}
+
+    {{- if hasSuffix "MongoSourceConnector" $connectorClass -}}
+
+        {{- $database := required
+            "provision.configs.database is required for MongoSourceConnector"
+            (get $connectorProvisionConfigs "database")
+        -}}
+
+        {{- $connectionUri := printf
+            "${file:/vault/secrets/connector/mongodb/mongodb-connection-uri:%s}"
+            $database
+        -}}
+
+        {{- $_ := set $connectionConfigs "connection.uri" $connectionUri -}}
+
+    {{- end -}}
+
+    {{- toYaml $connectionConfigs | nindent 4 -}}
+
+{{- end -}}
+{{- end -}}
+
+
+{{- define "cfk.connector.sink.connection" -}}
+{{- $root := .root -}}
+
+{{- $connectionConfigs := deepCopy
+    ($root.Values.cfk.connector.sink.connection.configs | default dict)
+-}}
+
+{{- $commonConfigs := deepCopy
+    ($root.Values.cfk.connector.shared.connection.configs | default dict)
+-}}
+
+{{- if hasSuffix "CloudPubSubSinkConnector" ($root.Values.cfk.connectorClass | default "") -}}
+
+    {{- $_ := mergeOverwrite $connectionConfigs $commonConfigs -}}
+
+{{- end -}}
+
+{{- toYaml $connectionConfigs | nindent 4 -}}
+{{- end -}}
