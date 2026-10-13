@@ -11,19 +11,10 @@
         ($root.Values.cfk.connector.sink.connection | default dict)
     -}}
 
-    {{- $commonConfigs := deepCopy
-        ($root.Values.cfk.connector.shared.connection.configs | default dict)
-    -}}
-
-    {{- $connectorClass := $root.Values.cfk.connectorClass | default "" -}}
-
-    {{- if hasSuffix "CloudPubSubSinkConnector" $connectorClass }}
-        {{- $_ := mergeOverwrite $connectionConfigs $commonConfigs -}}
-    {{- end }}
-
     {{- toYaml $connectionConfigs | nindent 4 }}
 {{- end }}
 {{- end }}
+
 
 cfk:
   connector:
