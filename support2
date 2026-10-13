@@ -1,5 +1,28 @@
 
 
+
+
+{{- define "cfk.connector.sink.connection" -}}
+{{- $root := .root -}}
+
+{{- if and
+    (hasKey $root.Values.cfk.connector "sink")
+    (hasKey $root.Values.cfk.connector.sink "connection")
+}}
+    {{- $connectionConfigs := deepCopy
+        ($root.Values.cfk.connector.sink.connection | default dict)
+    -}}
+
+    {{- $commonConfigs := deepCopy
+        ($root.Values.cfk.connector.shared.connection.configs | default dict)
+    -}}
+
+    {{- /* Sink-specific overrides/logic go here */ -}}
+
+    {{- toYaml $connectionConfigs | nindent 4 }}
+{{- end }}
+{{- end }}
+
 cfk:
   connector:
     connectorClass: com.google.pubsub.kafka.sink.CloudPubSubSinkConnector
@@ -52,7 +75,9 @@ cfk:
     {{- $connectionConfigs := deepCopy
         ($root.Values.cfk.connector.source.connection | default dict) -}}
 
-    {{- $connectorClass := $root.Values.cfk.connectorClass | default "" -}}
+
+
+{{- $connectorClass := $root.Values.cfk.connectorClass | default "" -}}
 
     {{/*
     MongoDB:
