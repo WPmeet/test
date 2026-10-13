@@ -1,9 +1,7 @@
-
-
-
-
 {{- define "cfk.connector.sink.connection" -}}
 {{- $root := .root -}}
+{{- $connectorProvision := .connectorConfigs | default dict -}}
+{{- $connectorProvisionConfigs := get $connectorProvision "configs" | default dict -}}
 
 {{- if and
     (hasKey $root.Values.cfk.connector "sink")
@@ -17,7 +15,11 @@
         ($root.Values.cfk.connector.shared.connection.configs | default dict)
     -}}
 
-    {{- /* Sink-specific overrides/logic go here */ -}}
+    {{- $connectorClass := $root.Values.cfk.connectorClass | default "" -}}
+
+    {{- if hasSuffix "CloudPubSubSinkConnector" $connectorClass }}
+        {{- $_ := mergeOverwrite $connectionConfigs $commonConfigs -}}
+    {{- end }}
 
     {{- toYaml $connectionConfigs | nindent 4 }}
 {{- end }}
