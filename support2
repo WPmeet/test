@@ -15,6 +15,18 @@
 {{- end }}
 {{- end }}
 
+Root Cause:
+
+The failure is caused by a suspected gRPC dependency or classloader conflict within the Kafka Connect plugin environment.
+
+The connector uses Google's GAX and gRPC libraries to establish communication with Pub/Sub. During initialisation, gRPC uses Java ServiceLoader to discover LoadBalancerProvider implementations. 
+The discovered io.grpc.rls.RlsLoadBalancerProvider cannot be cast to the expected LoadBalancerProvider class, resulting in a ServiceConfigurationError.
+
+Incompatible versions of grpc-api and grpc-core.
+Multiple versions of gRPC libraries present in the connector plugin directory.
+Dependency conflicts with other Kafka Connect plugins.
+Incomplete or incorrectly packaged connector dependencies.
+
 
 cfk:
   connector:
