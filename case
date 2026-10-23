@@ -10,6 +10,29 @@ spec:
       # Kafka fetch, group coordination and offset commits
       - log4j.logger.org.apache.kafka.clients.consumer=DEBUG
 
+spec:
+  configOverrides:
+    log4j:
+      # Pub/Sub connector itself
+      - log4j.logger.com.google.pubsub.kafka=TRACE
+
+      # Google Pub/Sub publisher and API client
+      - log4j.logger.com.google.cloud.pubsub=DEBUG
+      - log4j.logger.com.google.api.gax=DEBUG
+
+      # Google authentication
+      - log4j.logger.com.google.auth=DEBUG
+
+      # gRPC and transport, including shaded Netty
+      - log4j.logger.io.grpc=DEBUG
+      - log4j.logger.io.netty=DEBUG
+
+      # Retain sink flush/commit visibility; reduce consumer noise
+      - log4j.logger.org.apache.kafka.connect.runtime.WorkerSinkTask=DEBUG
+      - log4j.logger.org.apache.kafka.clients.consumer=INFO
+
+
+
 
 kubectl annotate kafka <kafka-name> -n <namespace> \
   platform.confluent.io/roll-pause=true \
