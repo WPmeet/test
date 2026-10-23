@@ -1,3 +1,16 @@
+spec:
+  configOverrides:
+    log4j:
+      # Google Pub/Sub connector itself
+      - log4j.logger.com.google.pubsub.kafka=DEBUG
+
+      # Connect sink processing and offset commit lifecycle
+      - log4j.logger.org.apache.kafka.connect.runtime.WorkerSinkTask=DEBUG
+
+      # Kafka fetch, group coordination and offset commits
+      - log4j.logger.org.apache.kafka.clients.consumer=DEBUG
+
+
 kubectl annotate kafka <kafka-name> -n <namespace> \
   platform.confluent.io/roll-pause=true \
   platform.confluent.io/block-reconcile=true \
