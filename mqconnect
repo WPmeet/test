@@ -33,3 +33,8 @@ jdk.tls.disabledAlgorithms=SSLv3, TLSv1, TLSv1.1, DTLSv1.0, RC4, DES, \
 
 - ECDH, TLS_RSA_*, rsa_pkcs1_sha1 usage HandshakeSignature,
 + ECDH, rsa_pkcs1_sha1 usage HandshakeSignature,
+
+java \
+  -Djava.security.properties=/vault/secrets/connector/mq/custom.java.security \
+  -Djava.security.debug=properties \
+  -version 2>&1 | grep 'jdk.tls.disabledAlgorithms'
