@@ -20,3 +20,6 @@ cfk:
         enabled: true
         extra:
           - -Djava.security.properties=/vault/secrets/connector/mq/custom.java.security
+
+
+grep -A 15 '^jdk.tls.disabledAlgorithms=' "$JAVA_HOME/conf/security/java.security"
