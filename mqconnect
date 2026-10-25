@@ -1,9 +1,26 @@
     jvm:
 {{- include "cfk.kafkaConnect.jvmTuningOptions" $ | indent 2 }}
+
       {{- if .Values.cfk.connect.jvmOverrides.enabled }}
-      - "-Dcom.ibm.mq.cfg.useIBMCipherMappings=false"
-      {{- if .Values.cfk.connect.jvmOverrides.legacyRsa.enabled }}
-      - "-Djava.security.properties=/vault/secrets/connector/mq/custom.java.security"
+      {{- range .Values.cfk.connect.jvmOverrides.extra }}
+      - {{ . | quote }}
       {{- end }}
       {{- end }}
-    server:
+
+      {{- if and .Values.cfk.connect.jvmOverrides.enabled .Values.cfk.connect.jvmOverrides.legacyRsa.enabled }}
+      {{- range .Values.cfk.connect.jvmOverrides.legacyRsa.extra }}
+      - {{ . | quote }}
+      {{- end }}
+      {{- end }}
+
+cfk:
+  connect:
+    jvmOverrides:
+      enabled: true
+      extra:
+        - -Dcom.ibm.mq.cfg.useIBMCipherMappings=false
+
+      legacyRsa:
+        enabled: true
+        extra:
+          - -Djava.security.properties=/vault/secrets/connector/mq/custom.java.security
