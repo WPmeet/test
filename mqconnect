@@ -1,16 +1,12 @@
     jvm:
 {{- include "cfk.kafkaConnect.jvmTuningOptions" $ | indent 2 }}
 
-      {{- if .Values.cfk.connect.jvmOverrides.enabled }}
       {{- range .Values.cfk.connect.jvmOverrides.extra }}
       - {{ . | quote }}
       {{- end }}
-      {{- end }}
 
-      {{- if and .Values.cfk.connect.jvmOverrides.enabled .Values.cfk.connect.jvmOverrides.legacyRsa.enabled }}
       {{- range .Values.cfk.connect.jvmOverrides.legacyRsa.extra }}
       - {{ . | quote }}
-      {{- end }}
       {{- end }}
 
 cfk:
