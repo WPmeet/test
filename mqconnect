@@ -1,0 +1,8 @@
+    jvm:
+{{- include "cfk.kafkaConnect.jvmTuningOptions" $ | indent 2 }}
+      {{- if .Values.cfk.connect.jvmOverrides.enabled }}
+      - "-Dcom.ibm.mq.cfg.useIBMCipherMappings=false"
+      {{- if .Values.cfk.connect.jvmOverrides.legacyRsa.enabled }}
+      - "-Djava.security.properties=/mnt/secrets/connect-java-security/custom.java.security"
+      {{- end }}
+      {{- end }}
