@@ -1,24 +1,9 @@
-  configOverrides:
-    {{- if or (has .Values.dcDeployment .Values.deploymentValues) .Values.cfk.connect.jvmOverrides.enabled }}
     jvm:
-      {{- if has .Values.dcDeployment .Values.deploymentValues }}
 {{- include "cfk.kafkaConnect.jvmTuningOptions" $ | indent 2 }}
-      {{- end }}
       {{- if .Values.cfk.connect.jvmOverrides.enabled }}
       - "-Dcom.ibm.mq.cfg.useIBMCipherMappings=false"
       {{- if .Values.cfk.connect.jvmOverrides.legacyRsa.enabled }}
       - "-Djava.security.properties=/vault/secrets/connector/mq/custom.java.security"
       {{- end }}
       {{- end }}
-    {{- end }}
-
-    {{- if has .Values.dcDeployment .Values.deploymentValues }}
     server:
-      - client.rack={{ include "cfk.kafkaConnect.clientRack" . }}
-      - config.providers=file
-      - config.providers.file.class=org.apache.kafka.common.config.provider.FileConfigProvider
-      - plugin.path=/usr/share/java,/usr/share/confluent-hub-components,/mnt/plugins,/usr/share/filestream-connectors
-    {{- end }}
-
-    log4j:
-{{- include "cfk.kafkaConnect.logging" $ | indent 2 }}
