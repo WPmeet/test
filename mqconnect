@@ -38,3 +38,15 @@ java \
   -Djava.security.properties=/vault/secrets/connector/mq/custom.java.security \
   -Djava.security.debug=properties \
   -version 2>&1 | grep 'jdk.tls.disabledAlgorithms'
+
+
+JAVA_PID="replace-with-java-pid"
+
+kubectl exec -n "$NS" "$POD" -- \
+  jcmd "$JAVA_PID" Thread.print -l > thread-1.txt
+
+sleep 15
+
+kubectl exec -n "$NS" "$POD" -- \
+  jcmd "$JAVA_PID" Thread.print -l > thread-2.txt
+
