@@ -5,6 +5,15 @@ find /usr/share/java /mnt/plugins -type f \
   \( -name 'grpc-*.jar' -o -name 'gax-*.jar' -o -name 'google-cloud-*.jar' \) \
   2>/dev/null | sort
 
+gcloud pubsub subscriptions describe SUBSCRIPTION_NAME \
+  --project=PROJECT_ID \
+  --format="yaml(topic,filter,ackDeadlineSeconds)"
+
+gcloud pubsub subscriptions pull SUBSCRIPTION_NAME \
+  --project=PROJECT_ID \
+  --limit=10 \
+  --format=json
+
 spec:
   class: org.apache.camel.kafkaconnector.googlepubsubsink.CamelGooglepubsubsinkSinkConnector
   class: org.apache.camel.kafkaconnector.googlepubsubsink.CamelGooglepubsubsinkSinkConnector
