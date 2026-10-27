@@ -1,4 +1,32 @@
 spec:
+  class: org.apache.camel.kafkaconnector.googlepubsubsink.CamelGooglepubsubsinkSinkConnector
+
+  configs:
+    tasks.max: "1"
+    topics: dev.BA0005741.e.wda.stmts.camt52
+
+    # Direct Camel Pub/Sub endpoint:
+    # project + destination topic + custom publisher endpoint + JSON credentials
+    camel.sink.url: "google-pubsub:hsbc-8578861-pd1-dev:pdp_wda_us_statement_sit_input_topic?pubsubEndpoint=googleapis-dev.gcp.cloud.uk.hsbc:3128&serviceAccountKey=file:/vault/secrets/connector/pubsub/pubsub-api-creds.json"
+
+    # Preserve the Kafka message value as bytes
+    key.converter: org.apache.kafka.connect.storage.StringConverter
+    value.converter: org.apache.kafka.connect.converters.ByteArrayConverter
+
+    # Kafka consumer settings
+    consumer.override.group.id: ba0005741_connect_wda-pubsub-sink-connector-test-v3
+    consumer.override.max.poll.interval.ms: "300000"
+    consumer.override.max.poll.records: "5"
+
+    # Kafka SSL
+    consumer.override.ssl.keystore.location: /vault/secrets/connector/keystore.jks
+    consumer.override.ssl.keystore.password: "${file:/vault/secrets/connector/jksPassword.txt:jksPassword}"
+    consumer.override.ssl.truststore.location: /vault/secrets/connector/truststore.jks
+    consumer.override.ssl.truststore.password: "${file:/vault/secrets/connector/jksPassword.txt:jksPassword}"
+
+  # Keep your existing connectRest and restartPolicy blocks unchanged.
+
+spec:
   configOverrides:
     log4j:
       # Google Pub/Sub connector itself
