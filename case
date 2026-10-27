@@ -25,7 +25,14 @@ spec:
     consumer.override.ssl.truststore.password: "${file:/vault/secrets/connector/jksPassword.txt:jksPassword}"
 
   # Keep your existing connectRest and restartPolicy blocks unchanged.
+spec:
+  class: org.apache.camel.kafkaconnector.googlepubsubsink.CamelGooglepubsubsinkSinkConnector
+  configs:
+    # Required by the Kamelet — even if you supplied camel.sink.url
+    camel.kamelet.google-pubsub-sink.projectId: "hsbc-8578861-pd1-dev"
+    camel.kamelet.google-pubsub-sink.destinationName: "pdp_wda_us_statement_sit_input_topic"
 
+    # Keep your existing topics, converters and consumer SSL settings.
 spec:
   configOverrides:
     log4j:
