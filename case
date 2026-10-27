@@ -22,6 +22,91 @@ spec:
     camel.kamelet.google-pubsub-sink.serviceAccountKey: ${file:/vault/secrets/connector/pubsub/pubsub-credentials.properties:serviceAccountKey}
 
 
+apiVersion: platform.confluent.io/v1beta1
+kind: Connector
+
+metadata:
+  name: kcc-nonprod-uk-pubsub-camel-sink-test
+  namespace: cto-esp-nonprod-uk
+
+spec:
+  class: org.apache.camel.kafkaconnector.googlepubsub.CamelGooglepubsubSinkConnector
+
+  taskMax: 1
+
+  configs:
+
+    # --------------------------------------------------
+    # KAFKA INPUT
+    # --------------------------------------------------
+
+    topics: "dev.BA0005741.e.wda.stmts.camt52"
+
+    consumer.override.group.id: "ba0005741_connect_wda-pubsub-camel-test-v1"
+    consumer.override.security.protocol: "SSL"
+
+    consumer.override.max.poll.interval.ms: "3000000"
+    consumer.override.max.poll.records: "5"
+
+    # --------------------------------------------------
+    # KAFKA TLS
+    # --------------------------------------------------
+
+    consumer.override.ssl.keystore.location: "/vault/secrets/connector/keystore.jks"
+    consumer.override.ssl.keystore.password: "${file:/vault/secrets/connector/jksPassword.txt:jksPassword}"
+
+    consumer.override.ssl.truststore.location: "/vault/secrets/connector/truststore.jks"
+    consumer.override.ssl.truststore.password: "${file:/vault/secrets/connector/jksPassword.txt:jksPassword}"
+
+    # --------------------------------------------------
+    # KAFKA CONVERTERS
+    # --------------------------------------------------
+
+    key.converter: "org.apache.kafka.connect.storage.StringConverter"
+    value.converter: "org.apache.kafka.connect.converters.ByteArrayConverter"
+
+    # --------------------------------------------------
+    # GOOGLE PUB/SUB DESTINATION
+    # --------------------------------------------------
+
+    camel.sink.path.projectId: "hsbc-8578861-pdl-dev"
+
+    camel.sink.path.destinationName: "pdp_wda_us_statement_sit_input_topic"
+
+    # --------------------------------------------------
+    # GOOGLE PUB/SUB CREDENTIALS
+    # --------------------------------------------------
+
+    camel.sink.endpoint.serviceAccountKey: "file:/vault/secrets/connector/pubsub/pubsub-api-creds.json"
+
+    # --------------------------------------------------
+    # GOOGLE PUB/SUB ENDPOINT
+    # --------------------------------------------------
+
+    camel.sink.endpoint.pubsubEndpoint: "googleapis-dev.gcp.cloud.uk.hsbc:3128"
+
+    # --------------------------------------------------
+    # MESSAGE ORDERING
+    # --------------------------------------------------
+
+    camel.sink.endpoint.messageOrderingEnabled: "true"
+
+    # --------------------------------------------------
+    # PUBLISHER
+    # --------------------------------------------------
+
+    camel.sink.endpoint.lazyStartProducer: "false"
+
+    camel.component.google-pubsub.publisherCacheSize: "10"
+
+    camel.component.google-pubsub.publisherTerminationTimeout: "60000"
+
+  # Retain your existing connectRest configuration.
+
+  restartPolicy:
+    type: OnFailure
+    maxRetry: 20
+
 spec:
   configOverrides:
     log4j:
