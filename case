@@ -1,3 +1,10 @@
+find /usr/share/java /mnt/plugins -type f \
+  \( -name 'grpc-*.jar' -o -name 'gax-grpc-*.jar' -o -name 'google-cloud-pubsub-*.jar' \) \
+  2>/dev/null | sort
+find /usr/share/java /mnt/plugins -type f \
+  \( -name 'grpc-*.jar' -o -name 'gax-*.jar' -o -name 'google-cloud-*.jar' \) \
+  2>/dev/null | sort
+
 spec:
   class: org.apache.camel.kafkaconnector.googlepubsubsink.CamelGooglepubsubsinkSinkConnector
   class: org.apache.camel.kafkaconnector.googlepubsubsink.CamelGooglepubsubsinkSinkConnector
